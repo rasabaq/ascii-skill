@@ -60,6 +60,8 @@ TINT = 0.25  # how much of the photo's hue the words keep
 TILE_GLYPHS = "#?&%/\\<>{}[]()*+=~^$@!:|0123456789ABCDEF"
 TILE_INK = ((42, 44, 46), (223, 227, 224))  # dark ink on light tiles, light ink on dark ones
 TILE_CUT = 40  # how much brighter (on a dark page) than the page a cell must be to become a tile, 0-255
+UNSUPPORTED = {".svg": "SVG is not supported: convert it to PNG first, e.g. rsvg-convert",
+               ".heic": "HEIC needs: pip install pillow-heif"}
 
 
 def rgb(value):
@@ -99,7 +101,7 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     autocontrast=False skips the per-image tonal stretch (animate.py applies one shared stretch).
     `cut` (0-1) sets the braille dot threshold; animate.py passes one for the whole clip.
     """
-    ramp = CHARSETS.get(charset or "standard", charset)
+    ramp = CHARSETS.get("standard" if charset is None else charset, charset)
     if len(ramp) < 2:
         raise ValueError("charset needs at least 2 characters")
     if not 1 <= width <= MAX_SIDE:
@@ -118,7 +120,7 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     flat = Image.new("RGBA", img.size, back + (255,))
     img = Image.alpha_composite(flat, img).convert("RGB")  # transparency becomes background
     if autocontrast:
-        img = ImageOps.autocontrast(img, cutoff=1)  # use the full tonal range, so dim photos still read
+        img = ImageOps.autocontrast(img, cutoff=1, preserve_tone=True)  # full tonal range, same hues: dim photos still read
     img = ImageEnhance.Brightness(ImageEnhance.Contrast(img).enhance(contrast)).enhance(brightness)
 
     rows = round(width * img.height / img.width * aspect)
@@ -128,8 +130,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     pw, ph = width * sx, rows * sy  # sampled pixels; each one is square when aspect is right
     if sharpen and pw < img.width:  # unsharp mask at the scale of one output pixel, so it survives the shrink
         img = img.filter(ImageFilter.UnsharpMask(radius=img.width / pw, percent=150, threshold=2))
-    # Nearest keeps pixel art crisp when upscaling; Lanczos averages well when shrinking.
-    resample = Image.Resampling.NEAREST if pw >= img.width else Image.Resampling.LANCZOS
+    # Nearest keeps pixel art crisp when upscaling; Lanczos averages well when shrinking (on either axis).
+    resample = Image.Resampling.NEAREST if pw >= img.width and ph >= img.height else Image.Resampling.LANCZOS
     small = img.resize((pw, ph), resample, reducing_gap=3.0)
     if mode == "halfblock":  # true colors, two pixels per cell
         px = (ImageOps.invert(small) if invert else small).load()
@@ -309,9 +311,8 @@ def _shade(cell):
     return "█▓▒░ "[4 - min(4, round(lum / 255 * 4))]
 
 
-def to_text(grid):
-    # Next to tiles, loose glyphs are faint decoration; plain text cannot draw them faint, so it drops them.
-    tiles = any(len(c) == 3 and c[0] != HALF for row in grid for c in row)
+def to_text(grid, tiles=False):
+    # tiles=True: loose glyphs between tiles are faint decoration; plain text cannot draw them faint, so it drops them.
     return "\n".join("".join(_shade(c) if c[0] == HALF else " " if tiles and len(c) == 2 else c[0]
                              for c in row).rstrip() for row in grid) + "\n"
 
@@ -419,7 +420,10 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
     glyphs = {c[0] for row in grid for c in row if c[0] not in SHADES and c[0] != HALF and not _braille(c[0])}
     f = font(min(font_size, round(chh / 1.2)), "".join(glyphs))  # glyphs shrink to fit short cells (square tiles)
     mode, back = ("RGBA", (0, 0, 0, 0)) if bg == "none" else ("RGB", rgb(bg))
-    img = Image.new(mode, (len(grid[0]) * cw, len(grid) * chh), back)
+    size = (len(grid[0]) * cw, len(grid) * chh)
+    if size[0] * size[1] > 2 * Image.MAX_IMAGE_PIXELS:  # past Pillow's own bomb limit: GBs of RAM
+        raise ValueError("image would be %dx%d px; lower -w or --font-size" % size)
+    img = Image.new(mode, size, back)
     draw = ImageDraw.Draw(img)
     for y, row in enumerate(grid):
         for x, (ch, c, *under) in enumerate(row):
@@ -515,16 +519,17 @@ def main(argv=None):
             with open(a.output, "w", encoding="utf-8") as out:
                 out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap))
         else:
-            text = to_ansi(grid, fg) if a.color else to_text(grid)
+            text = to_ansi(grid, fg) if a.color else to_text(grid, a.mode == "tiles")
             if a.output:
                 with open(a.output, "w", encoding="utf-8") as out:
                     out.write(text)
             else:
+                if hasattr(sys.stdout, "reconfigure"):  # art is Unicode: never die on an ascii or cp1252 pipe
+                    sys.stdout.reconfigure(encoding="utf-8")
                 sys.stdout.write(text)
     except Image.UnidentifiedImageError as e:
-        hint = {".svg": " (SVG is not supported: convert it to PNG first, e.g. rsvg-convert)",
-                ".heic": " (HEIC needs: pip install pillow-heif)"}.get(os.path.splitext(a.image)[1].lower(), "")
-        p.error(str(e) + hint)
+        hint = UNSUPPORTED.get(os.path.splitext(a.image)[1].lower())
+        p.error(str(e) + (" (%s)" % hint if hint else ""))
     except (OSError, ValueError, Image.DecompressionBombError) as e:
         p.error(str(e))
 
