@@ -23,14 +23,14 @@ import time
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequence, ImageStat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, add_poster_args, convert,  # noqa: E402
+from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, _glow_css, add_poster_args, convert,  # noqa: E402
                    POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
 import effects  # noqa: E402
 import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
-MARK2 = "\ue001"  # MARK2 + 6 hex = two-color (halfblock) cells: top and bottom color.
-MARK3 = "\ue002"  # MARK3 + 6 hex = glyph on its own background: ink and background color.
+MARK2 = "\ue001"  # MARK2 + 12 hex = two-color (halfblock) cells: exact top and bottom color.
+MARK3 = "\ue002"  # MARK3 + 12 hex = glyph on its own background: exact ink and background color.
 HOLD_MS = 1500  # an effect holds the finished art this long before it loops
 MAX_MOVING = 0.4  # --subject gives up when more than this share of the picture's edges changes: the camera moves
 MAX_BYTES = 3_000_000_000  # ponytail: GIF/WebP encoders keep every rendered frame in RAM; refuse past ~3 GB
@@ -193,7 +193,8 @@ def prepare(img, back, px):
 
 def html_frame(grid, fg, boxed=False, tiles=False):
     """One frame as HTML text where MARK + 3 hex digits starts a new color; the player turns marks into spans.
-    Colors are rounded to 12 bits so neighbouring cells merge into one run. `boxed` puts each glyph in its
+    Ink is rounded to 12 bits so neighbouring cells merge into one run; two-color cells keep exact colors,
+    since a smooth sky in halfblock would band in 16 steps. `boxed` puts each glyph in its
     own <b> box (glyphs narrower than the cell); `tiles` gives every glyph-on-background cell its own span."""
     esc = (lambda t: "".join("<b>%s</b>" % html.escape(c) for c in t)) if boxed else html.escape
     lines = []
@@ -202,7 +203,7 @@ def html_frame(grid, fg, boxed=False, tiles=False):
         for cell in row:
             ch = cell[0]
             if len(cell) > 2:  # halfblock: the player paints it as a background, so the text is a space
-                pair = "".join("%x%x%x" % tuple((v + 8) // 17 for v in c) for c in cell[1:3])
+                pair = "".join("%02x%02x%02x" % tuple(c) for c in cell[1:3])
                 ch, col = (" ", MARK2 + pair) if ch == HALF else (ch, MARK3 + pair)
             else:
                 col = None if fg else MARK + "%x%x%x" % tuple((v + 8) // 17 for v in cell[1])
@@ -217,8 +218,8 @@ def html_frame(grid, fg, boxed=False, tiles=False):
     return "\n".join(lines)
 
 
-def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0):
-    """`gap` (px) parts the boxes of glyph-on-background cells from each other; (0, y) only parts stacked rows (words mode)."""
+def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0, glow=0):
+    """`glow` (0-1) adds a soft bloom around the glyphs. `gap` (px) parts the boxes of glyph-on-background cells from each other; (0, y) only parts stacked rows (words mode)."""
     cw = font_size * CELL_W
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     size = min(font_size, round(cw / aspect / 1.2))  # glyphs shrink to fit short cells, as in ascii.to_html
@@ -234,9 +235,9 @@ def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0):
             else "i.t{box-shadow:inset 0 %dpx %s,inset 0 -%dpx %s}" % (gy, shadow, gy, shadow) if gy else "")
     box = ("%.3f" % (cw / size), "text-align:center;") if boxed else (CELL_W, "")
     return """<!doctype html><meta charset="utf-8"><title>ASCII animation</title>
-<style>body{margin:0;background:%s;color:%s}i{font-style:normal}%s
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:%s;color:%s}i{font-style:normal}%s
 i.h{display:inline-block;vertical-align:top;height:%.3fem}b{display:inline-block;width:%sem;%sfont-weight:normal}
-pre{margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer}
+pre{margin:0;padding:16px;width:%.1fpx;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer%s}
 button{position:fixed;right:12px;bottom:12px;font:13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;
 border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}</style>
 <pre id="a" title="Click or press space to play or pause"></pre><button id="b">Pause</button>
@@ -245,8 +246,8 @@ const [F, I, D] = %s, a = document.getElementById("a"), b = document.getElementB
 let i = 0, t = null, due = 0;
 function step() {
   a.innerHTML = F[I[i]].replace(/\\n/g, "</i>\\n").replace(/[\u2800-\u28ff]/g, "<b>$&</b>").replace(/\ue000(...)/g, '</i><i style="color:#$1">')
-    .replace(/\ue001(...)(...)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
-    .replace(/\ue002(...)(...)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
+    .replace(/\ue001(......)(......)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
+    .replace(/\ue002(......)(......)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
   due += D[i]; i = (i + 1) %% I.length;
   t = setTimeout(step, Math.max(0, due - performance.now()));
 }
@@ -258,7 +259,8 @@ a.onclick = b.onclick = toggle;
 onkeydown = e => { if (e.key === " ") { e.preventDefault(); toggle(); } };
 due = performance.now(); step();
 </script>
-""" % ((back, ink, edge, cw / aspect / size) + box + (size, cw / aspect / size, data))
+""" % ((back, ink, edge, cw / aspect / size) + box + (cw * len(grids[0][0]), size, cw / aspect / size,
+                                                    _glow_css(glow, font_size), data))
 
 
 def snap(images, durs, unit, least):
@@ -345,6 +347,7 @@ def main(argv=None):
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
+    p.add_argument("--glow", type=float, default=0, help="soft bloom around the glyphs, 0-1 (try 0.8)")
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
     p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
@@ -364,9 +367,9 @@ def main(argv=None):
     poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
-    if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) or a.subject_cut <= 0 \
+    if a.font_size < 1 or not 0 <= a.glow <= 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) or a.subject_cut <= 0 \
             or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE):
-        p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --subject-cut > 0, "
+        p.error("need --font-size >= 1, --glow 0-1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --subject-cut > 0, "
                 "-w 1-%d" % MAX_SIDE)
     if a.scene and (a.start or a.duration):
         p.error("--start and --duration pick a slice of an input file; a --scene is one short loop")
@@ -452,7 +455,7 @@ def main(argv=None):
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap) for g in grids]
+            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow) for g in grids]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps)
             else:
@@ -462,7 +465,7 @@ def main(argv=None):
                             **({"lossless": True} if ext == ".webp" else {}))
         elif ext:
             with open(a.output, "w", encoding="utf-8") as f:
-                f.write(to_html_player(grids, durs, a.bg, fg, a.font_size, a.aspect, a.gap))
+                f.write(to_html_player(grids, durs, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow))
         else:
             play([to_ansi(g, fg).replace("\n", "\x1b[K\n") for g in grids], durs)
     except KeyboardInterrupt:
