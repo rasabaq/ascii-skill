@@ -603,3 +603,170 @@ def city(w, h, n, seed):
             draw.rectangle((x, deck + 11 * u, x + 2 * u, H), fill=(52, 56, 74))
         out.append(_shrink(im, w, h))
     return out
+
+
+@scene(320, 240, 75, 25)
+def tree(w, h, n, seed):
+    """An autumn tree on a hill, swaying in the wind, losing leaves. The tree is a seeded list of branches,
+    each stored as an angle relative to its parent, so every frame rebuilds it from the root (forward
+    kinematics) and branches can never come apart. Wind adds to each angle a bend that grows with depth and
+    lags by depth, so a gust travels up from the trunk to the twigs. It has one slow and one fast harmonic,
+    each a whole number of cycles per loop. Falling leaves grow in at a twig and leave below the frame."""
+    rng = random.Random(seed)
+    W, H = w * SS, h * SS
+    u = H / 240  # one pixel at the default size
+    cx, top = 0.5 * W, 0.8 * H  # tree root, on top of the hill
+
+    def ground(x):
+        return top + 0.09 * H * ((x - cx) / (0.5 * W)) ** 2
+
+    # Branches: (parent, angle to parent, length, start width, end width, depth, wind phase). Each child
+    # leans back toward upright a little, so the crown grows up and out instead of drooping.
+    nodes = []
+
+    def grow(parent, rel, absolute, length, width, depth):
+        end = max(1.6 * u, width * 0.72)
+        nodes.append((parent, rel, length, width, end, depth, rng.uniform(-0.5, 0.5)))
+        i = len(nodes) - 1
+        if depth == 9 or (depth >= 4 and rng.random() < 0.15):
+            return
+        offsets = (-1, 0, 1) if 1 <= depth <= 2 and rng.random() < 0.35 else (-1, 1)
+        spread = rng.uniform(0.35, 0.55)
+        for o in offsets:
+            a = spread * o + rng.uniform(-0.15, 0.15) - 0.12 * absolute
+            grow(i, a, absolute + a, length * rng.uniform(0.7, 0.84), max(1.6 * u, end * rng.uniform(0.78, 0.92)),
+                 depth + 1)
+
+    grow(-1, rng.uniform(-0.05, 0.05), 0, 1.0, 26 * u, 0)
+    bend = [0.008 + 0.009 * d for d in range(10)]  # radians of wind per level: twigs bend most
+
+    def pose(t, gust=1.0):
+        """Each branch as (start x, start y, angle, end x, end y); angle 0 points up, positive leans right."""
+        out = []
+        for parent, rel, length, _w0, _w1, d, ph in nodes:
+            x, y, a = (cx, top, 0) if parent < 0 else (out[parent][3], out[parent][4], out[parent][2])
+            wind = 0.5 + math.sin(TAU * (t - 0.035 * d) + ph) + 0.35 * math.sin(TAU * (2 * t - 0.07 * d) + 2 * ph + 1)
+            a += rel + gust * bend[d] * wind
+            out.append((x, y, a, x + length * scale * math.sin(a), y - length * scale * math.cos(a)))
+        return out
+
+    scale = 1.0
+    rest = pose(0, 0)
+    scale = min((top - 0.1 * H) / (top - min(p[4] for p in rest)), 0.4 * W / max(abs(p[3] - cx) for p in rest))
+    rest = pose(0, 0)
+    tips = [i for i in range(len(nodes)) if i == len(nodes) - 1 or nodes[i + 1][0] != i]
+    # Leaf clusters: two or three blobs on each twig, in the twig's own frame so they sway with it. A blob
+    # is lit by where it sits in the crown (upper left is bright) plus noise. All shadows are drawn first,
+    # then the leaves, then the highlights, so the crown breaks into lit clumps over dark gaps.
+    ccx, ccy = sum(rest[i][3] for i in tips) / len(tips), sum(rest[i][4] for i in tips) / len(tips)
+    span = max(math.hypot(rest[i][3] - ccx, rest[i][4] - ccy) for i in tips)
+    autumn = _lut([(0, (70, 20, 12)), (0.3, (150, 45, 20)), (0.55, (205, 90, 28)), (0.8, (240, 160, 45)),
+                   (1, (255, 215, 110))])
+
+    def ink(v):
+        return autumn[max(0, min(255, round(255 * v)))]
+
+    # Leaves grow on every branch from depth 5 out, so the crown is full and not a thin shell. Branches
+    # that share a depth-6 branch form one clump: lit on its upper left, dark on its lower right, and
+    # darker deeper inside the crown.
+    clumps = {}
+    for i, nd in enumerate(nodes):
+        if nd[5] >= 5:
+            j = i
+            while nodes[j][5] > 6:
+                j = nodes[j][0]
+            clumps.setdefault(j, []).append(i)
+    blobs = []
+    for group in clumps.values():
+        gx, gy = sum(rest[i][3] for i in group) / len(group), sum(rest[i][4] for i in group) / len(group) - 4 * u
+        size = max(10 * u, max(math.hypot(rest[i][3] - gx, rest[i][4] - gy) for i in group))
+        tone = 0.42 + 0.22 * ((ccx - gx) * 0.6 + (ccy - gy) * 0.8) / span + rng.uniform(-0.15, 0.15)
+        for i in group:
+            d = nodes[i][5]
+            for _ in range(rng.choice((2, 3)) if i in tips else 1):
+                dx, dy, r = rng.uniform(-6, 6) * u, rng.uniform(-8, 2) * u, rng.uniform(5, 8) * u
+                px, py = rest[i][3] + dx, rest[i][4] + dy
+                lit = tone + 0.3 * ((gx - px) * 0.6 + (gy - py) * 0.8) / size - 0.04 * (9 - d) + rng.uniform(-0.05, 0.05)
+                blobs.append((d, i, dx, dy, r, max(0.12, min(0.95, lit))))
+    blobs.sort(key=lambda b: b[0])  # inner leaves first, twig tips on top
+    # Shaded foliage deep in the crown, drawn behind the branches, so the inside is not an empty hole.
+    back = [(i, rng.uniform(-10, 10) * u, rng.uniform(-18, 0) * u, rng.uniform(12, 18) * u, rng.uniform(0.14, 0.26))
+            for i, nd in enumerate(nodes) if nd[5] in (3, 4) for _ in range(2)]
+
+    def at(p, i, dx, dy):
+        """A point fixed to branch i's end, turning with it."""
+        a, x, y = p[i][2:]
+        return x + dx * math.cos(a) - dy * math.sin(a), y + dx * math.sin(a) + dy * math.cos(a)
+    # Falling leaves: (twig, start, falls per loop, drift right, wobble, flutter, spin, phase, shade).
+    leaves = [(rng.choice(tips), rng.random(), rng.choice((1, 1, 2)), rng.uniform(0.15, 0.45) * W, rng.uniform(4, 12) * u,
+               rng.uniform(1.5, 3), rng.uniform(2, 5), rng.uniform(0, TAU), rng.uniform(0.5, 0.9)) for _ in range(12)]
+    # Still background: night sky, the hill with a lit rim, and fallen leaves.
+    grad = Image.new("L", (1, H))
+    grad.putdata([round(255 * y / H) for y in range(H)])
+    bg = _colorize(grad.resize((W, H)), _lut([(0, (3, 4, 12)), (0.8, (16, 11, 24)), (1, (16, 11, 24))]))
+    draw = ImageDraw.Draw(bg)
+    hill = [(x, ground(x) - 2 * u) for x in range(-W // 10, W + W // 10, 4)]
+    draw.polygon(hill + [(W + W // 10, H), (-W // 10, H)], fill=(32, 31, 17))
+    draw.line(hill, fill=(92, 88, 40), width=round(3 * u))
+    for _ in range(18):  # fallen leaves gather under the crown
+        x = cx + rng.gauss(0, 0.2) * W
+        y, r = ground(x) + rng.uniform(5 * u, 0.12 * H), rng.uniform(2.5, 3.5) * u
+        draw.ellipse((x - r, y - 0.55 * r, x + r, y + 0.55 * r), fill=ink(rng.uniform(0.2, 0.45)))
+    tufts = [rng.uniform(0, W) for _ in range(26)]
+    poses = [pose(k / n) for k in range(n)]
+    base = (105, 74, 52)
+    out = []
+    for k in range(n):
+        t = k / n
+        im = bg.copy()
+        draw = ImageDraw.Draw(im)
+        for x in tufts:  # grass bends with the same wind, a little later the further right it is
+            y = ground(x)
+            sway = 0.25 + 0.25 * math.sin(TAU * (t - 0.3 * x / W)) + 0.1 * math.sin(TAU * (2 * t - 0.6 * x / W))
+            for j, a in enumerate((-0.45, 0.0, 0.4)):
+                ln = (7 + 3 * (j == 1)) * u
+                draw.line([(x + 2 * (j - 1) * u, y), (x + ln * math.sin(a + sway), y - ln * math.cos(a + sway))],
+                          fill=(120, 124, 52), width=round(2 * u))
+        p = poses[k]
+        rw = nodes[0][3] / 2
+        draw.polygon([(cx - 1.8 * rw, top + 2 * u), (cx - rw, top - 10 * u), (cx + rw, top - 10 * u),
+                      (cx + 1.8 * rw, top + 2 * u)], fill=base)  # root flare
+        for i, dx, dy, r, v in back:
+            bx, by = at(p, i, dx, dy)
+            draw.ellipse((bx - r, by - r, bx + r, by + r), fill=ink(v))
+        for (par, _rel, _len, w0, w1, d, _ph), (x0, y0, a, x1, y1) in zip(nodes, p):
+            ca, sa = math.cos(a), math.sin(a)
+            bark = tuple(round(c0 + (c1 - c0) * min(1, d / 5)) for c0, c1 in zip(base, (165, 125, 90)))
+            draw.polygon([(x0 - ca * w0 / 2, y0 - sa * w0 / 2), (x1 - ca * w1 / 2, y1 - sa * w1 / 2),
+                          (x1 + ca * w1 / 2, y1 + sa * w1 / 2), (x0 + ca * w0 / 2, y0 + sa * w0 / 2)], fill=bark)
+            if par >= 0:  # round joints hide the seams between a branch and its children
+                draw.ellipse((x0 - w0 / 2, y0 - w0 / 2, x0 + w0 / 2, y0 + w0 / 2), fill=bark)
+            if w0 > 6 * u:  # a lit stripe on the left side of thick limbs makes them look round
+                o0, o1 = 0.22 * w0, 0.22 * w1
+                draw.line([(x0 - ca * o0, y0 - sa * o0), (x1 - ca * o1, y1 - sa * o1)],
+                          fill=tuple(c + 45 for c in bark), width=max(1, round(0.2 * w1)))
+        for layer in range(3):
+            for _d, i, dx, dy, r, lit in blobs:
+                if layer == 2 and lit < 0.6:
+                    continue
+                bx, by = at(p, i, dx, dy)
+                if layer == 0:
+                    bx, by, r, v = bx + 2 * u, by + 3 * u, r * 1.15, lit * 0.35
+                elif layer == 1:
+                    v = lit
+                else:
+                    bx, by, r, v = bx - 0.25 * r, by - 0.3 * r, r * 0.55, lit + 0.25
+                draw.ellipse((bx - r, by - r, bx + r, by + r), fill=ink(v))
+        for tip, p0, times, drift, wob, flutter, spin, ph, lit in leaves:
+            s = (p0 + times * t) % 1.0
+            x0, y0 = poses[round((t - s / times) * n) % n][tip][3:]  # where its twig was when it let go
+            x = x0 + drift * s + wob * math.sin(TAU * flutter * s + ph)
+            y = y0 + (H + 12 * u - y0) * s ** 1.4
+            size = 5.5 * u * min(1, s / 0.1)  # grows in at the twig instead of popping up
+            ang = TAU * spin * s + ph
+            c, sn = size * math.cos(ang), size * math.sin(ang)
+            f = 0.6 * (0.3 + 0.7 * abs(math.cos(TAU * flutter * s * 0.7 + ph)))  # flips as it tumbles
+            draw.polygon([(x + c, y + sn), (x - f * sn, y + f * c), (x - c, y - sn), (x + f * sn, y - f * c)],
+                         fill=ink(lit))
+        out.append(_shrink(im, w, h))
+    return out
