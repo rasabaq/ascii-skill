@@ -22,6 +22,7 @@ CRT_BLOOM = 0.45  # crt alone adds a lighter bloom
 CHROMA = 1 / 600  # red/blue split at the left and right edges, as a share of the width; none in the centre
 CURVE = 0.08  # crt bulge: how far the corners bend in, as a share of the half size
 BEZEL = 0.012  # crt: dark border around the curved screen, as a share of the size
+GLASS = (17, 20, 19)  # crt: the screen's own glow, a dark phosphor gray
 VIGNETTE = 0.5  # how much the far corners darken
 CRT_VIGNETTE = 0.3
 GRAIN = 8  # grain strength: spread (std) of the noise around mid gray; overlay blend, so black and white stay clean
@@ -135,8 +136,8 @@ def apply(img, names, row=0):
         img = flat
     if "bloom" in names or "crt" in names:
         img = _bloom(img, BLOOM[1] if "bloom" in names else CRT_BLOOM, row)
-    if "crt" in names:
-        img = _curve(img)
+    if "crt" in names:  # faint lit glass, so the curved screen shows even where the art is black
+        img = ImageChops.screen(_curve(img), Image.new("RGB", img.size, GLASS))
     if "chroma" in names:
         img = _chroma(img)
     if {"scan", "vignette", "crt"} & set(names):
