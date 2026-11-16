@@ -65,7 +65,7 @@ assert rows[0][-5:] == rows[1][-5:], "background stays the same"
 
 # Halfblock rows keep their colored spaces, and the player's JS has no raw newline inside a regex.
 hb = [[("▀", (255, 0, 0), (0, 0, 255))] * 3, [("▀", (0, 255, 0), (0, 0, 0))] * 3]
-assert html_frame(hb, None).split("\n")[0] == MARK2 + "f0000f   "
+assert html_frame(hb, None).split("\n")[0] == MARK2 + "ff00000000ff   "
 page = to_html_player([hb], [100], "black", None, 12, 0.5)
 assert re.search(r"replace\(/\\n/g", page) and not re.search(r"replace\(/\n", page)
 

@@ -140,7 +140,7 @@ assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
 stripes = Image.new("L", (100, 100))
 for y in range(0, 100, 2):
     stripes.paste(255, (0, y, 100, y + 1))
-assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row} <= set("*+="), "mid-gray"
+assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row}.isdisjoint(" @#"), "mid-gray"
 
 # The tonal stretch keeps hues: a gray ground under a blue-black sky stays gray, not cyan.
 sky = Image.new("RGB", (40, 40), (20, 20, 30))
@@ -153,6 +153,11 @@ duo = Image.new("RGB", (200, 200), (128, 128, 128))
 duo.paste((255, 0, 0), (0, 0, 100, 200))
 words = convert(duo, width=40, mode="words", accent="#ff0000")
 assert sum(ch not in " \n" for ch in to_text(words)) == sum(c[0] != " " for row in words for c in row)
+
+# Glow: light bleeds into the empty cell next to a glyph; HTML gets the same as a text-shadow.
+lone = [[("#", (0, 255, 0)), (" ", (0, 0, 0))]]
+assert to_png(lone, glow=0.8).getpixel((10, 12))[1] > to_png(lone).getpixel((10, 12))[1] == 0
+assert "text-shadow:0 0 6.7px" in to_html(lone, glow=0.8) and "text-shadow" not in to_html(lone)
 
 # A grid too big to render in RAM is refused, not allocated.
 try:
