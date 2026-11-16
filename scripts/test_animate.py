@@ -2,6 +2,8 @@
 # dependencies = ["pillow>=10.1"]
 # ///
 """Run: uv run scripts/test_animate.py"""
+import contextlib
+import io
 import json
 import os
 import random
@@ -16,7 +18,7 @@ from PIL import Image, ImageDraw, ImageSequence
 
 sys.path.insert(0, os.path.dirname(__file__))
 from animate import (MARK2, background, html_frame, main, shared_lut, snap, steady, subject_masks,  # noqa: E402
-                     timeline, to_html_player, video_frames)
+                     timeline, to_html_player, to_mp4, video_frames)
 from ascii import convert  # noqa: E402
 
 # A 3-frame GIF: a white box moving over a dim gradient, with uneven delays.
@@ -78,6 +80,21 @@ fx = Image.open(os.path.join(tmp, "fx.gif"))
 assert fx.n_frames > 10 and fx.info.get("loop") == 0
 
 
+def player_durs(args):
+    path = os.path.join(tmp, "durs.html")
+    with contextlib.redirect_stdout(io.StringIO()) as said:
+        main(args + ["-o", path])
+    assert said.getvalue().startswith("wrote %s (" % path), said.getvalue()  # says where the file went
+    return json.loads(re.search(r"const \[F, I, D\] = (.*), a =", open(path, encoding="utf-8").read()).group(1))[2]
+
+
+# --hold: intros hold the art 1.5 s by default, loops (wave, glitch) and --hold 0 restart at once.
+assert player_durs([still, "--effect", "decode", "-w", "10"])[-1] == 1540
+assert set(player_durs([still, "--effect", "decode", "-w", "10", "--hold", "0"])) == {40}
+assert set(player_durs([still, "--effect", "wave", "-w", "10"])) == {40}
+assert player_durs([src, "-w", "10", "--hold", "2"]) == [100, 200, 2300]
+
+
 def player_rows(args, path):
     """Run main to an HTML player; return each shown frame as text rows without color marks."""
     main(args + ["-o", path])
@@ -126,4 +143,16 @@ if shutil.which("ffmpeg") and shutil.which("ffprobe"):
                     "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", vid], check=True)
     img, _ = next(video_frames(vid, Namespace(fps=None, start=0, duration=None), 480, 5))
     assert abs(img.width / img.height - 16 / 9) < 0.02, img.size
+
+    # MP4 is BT.709 and tagged, so browsers show the exact page color; odd sizes are cut, not padded with black.
+    mp4 = os.path.join(tmp, "page.mp4")
+    to_mp4([Image.new("RGB", (41, 31), (243, 234, 216))] * 2, [40, 40], mp4, None)
+    tags = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,color_space,color_primaries,"
+                           "color_transfer,color_range", "-of", "csv=p=0", mp4], capture_output=True, text=True).stdout
+    w, h, *color = tags.strip().split(",")
+    assert int(w) % 2 == 0 and int(h) % 2 == 0 and color == ["tv", "bt709", "bt709", "bt709"], tags
+    px = subprocess.run(["ffmpeg", "-v", "error", "-i", mp4, "-frames:v", "1", "-vf", "crop=2:2:iw-2:ih-2,"
+                         "scale=in_color_matrix=bt709:in_range=tv:flags=accurate_rnd,format=rgb24", "-f", "rawvideo",
+                         "-"], capture_output=True).stdout
+    assert all(abs(v - t) <= 2 for v, t in zip(px, (243, 234, 216) * 4)), list(px)  # corner, so the cut edge too
 print("ok")

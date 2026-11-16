@@ -23,6 +23,10 @@ for name in EFFECTS:
     t = time.time()
     frames(grid, name, n=80)
     assert time.time() - t < 2, name
+# No built-in hold: intros move until the end (animate.py --hold adds the pause), and wave rests only ~3 frames.
+for name in ("matrix", "decode", "scan", "wave"):
+    assert frames(grid, name)[-4] != grid, name
+assert frames(grid, "wave")[3] != grid
 try:
     frames(grid, "nope")
 except ValueError:

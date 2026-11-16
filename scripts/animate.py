@@ -31,7 +31,6 @@ import scenes  # noqa: E402
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
 MARK2 = "\ue001"  # MARK2 + 6 hex = two-color (halfblock) cells: top and bottom color.
 MARK3 = "\ue002"  # MARK3 + 6 hex = glyph on its own background: ink and background color.
-HOLD_MS = 1500  # an effect holds the finished art this long before it loops
 MAX_MOVING = 0.4  # --subject gives up when more than this share of the picture's edges changes: the camera moves
 MAX_BYTES = 3_000_000_000  # ponytail: GIF/WebP encoders keep every rendered frame in RAM; refuse past ~3 GB
 
@@ -274,16 +273,20 @@ def snap(images, durs, unit, least):
     return keep, [(b - a) * unit for a, b in zip(starts, starts[1:])]
 
 
-def to_mp4(images, durs, path, fps):
-    """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid."""
+def to_mp4(images, durs, path, fps, crf=23):
+    """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid.
+    Converted and tagged as BT.709, so browsers show the exact --bg color (untagged video shifts it).
+    An odd last pixel row or column is cut (4:2:0 needs even sizes): padding would add a black line."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise ValueError(".mp4 output needs ffmpeg")
     fps = fps or min(60, 1000 / min(durs))
     w, h = images[0].size
     proc = subprocess.Popen([ffmpeg, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "%dx%d" % (w, h),
-                             "-r", "%.6g" % fps, "-i", "-", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264",
-                             "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", path],
+                             "-r", "%.6g" % fps, "-i", "-", "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2,scale=out_color_matrix=bt709:"
+                             "out_range=tv:flags=accurate_rnd,format=yuv420p,setparams=color_primaries=bt709:"
+                             "color_trc=bt709:colorspace=bt709:range=tv", "-c:v", "libx264", "-tune", "animation",
+                             "-crf", "%g" % crf, "-movflags", "+faststart", path],
                             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     t = k = 0
     try:
@@ -342,6 +345,10 @@ def main(argv=None):
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
+    p.add_argument("--hold", type=float, help="seconds the last frame stays before the loop restarts (default: 1.5 "
+                   "for matrix, decode and scan; 0 for everything else, a seamless loop)")
+    p.add_argument("--crf", type=float, default=23, help="MP4 quality, 0-51: lower is sharper and bigger (default 23; "
+                   "with --font-size 16 or more, 28 still looks clean and is ~30% smaller)")
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
     p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
@@ -362,8 +369,10 @@ def main(argv=None):
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
     if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) \
-            or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE):
-        p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, -w 1-%d" % MAX_SIDE)
+            or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE) \
+            or (a.hold or 0) < 0 or not 0 <= a.crf <= 51:
+        p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --hold >= 0, "
+                "--crf 0-51, -w 1-%d" % MAX_SIDE)
     try:
         bg = "black" if a.bg == "none" else a.bg
         back = rgb(bg)
@@ -437,7 +446,9 @@ def main(argv=None):
             if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
             grids = effects.frames(grids[0], a.effect)
-            durs = [1000 / effects.FPS] * (len(grids) - 1) + [HOLD_MS]
+            durs = [1000 / effects.FPS] * len(grids)
+        hold = a.hold if a.hold is not None else 1.5 if a.effect and a.effect not in effects.LOOPS else 0
+        durs[-1] += hold * 1000
         if ext in (".gif", ".webp", ".mp4"):
             cw = max(1, round(a.font_size * CELL_W))
             size = len(grids[0][0]) * cw * len(grids) * max(1, round(cw / a.aspect)) * len(grids[0]) * 4
@@ -446,7 +457,7 @@ def main(argv=None):
                                  % (len(grids), len(grids[0][0])))
             out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap) for g in grids]
             if ext == ".mp4":
-                to_mp4(out, durs, a.output, a.fps)
+                to_mp4(out, durs, a.output, a.fps, a.crf)
             else:
                 # GIF ticks are 10 ms and browsers slow frames under 20 ms, so 60 fps becomes ~40 fps.
                 out, durs = snap(out, durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
@@ -457,6 +468,10 @@ def main(argv=None):
                 f.write(to_html_player(grids, durs, a.bg, fg, a.font_size, a.aspect, a.gap))
         else:
             play([to_ansi(g, fg).replace("\n", "\x1b[K\n") for g in grids], durs)
+        if ext:
+            kb = os.path.getsize(a.output) / 1000
+            print("wrote %s (%s, %.1f s)" % (a.output, "%.1f MB" % (kb / 1000) if kb >= 1000 else "%d KB" % -(-kb // 1),
+                                            sum(durs) / 1000))
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:  # one-line error for any bad input, never a traceback

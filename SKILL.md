@@ -102,6 +102,7 @@ uv run scripts/animate.py cat.gif                          # play in the termina
 uv run scripts/animate.py cat.gif -o out.gif               # also .webp, .mp4, or .html (one file with a play/pause player)
 uv run scripts/animate.py clip.mp4 -o out.html --start 2 --duration 4 --fps 12
 uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a still image
+uv run scripts/animate.py photo.jpg --effect decode --hold 0 -o intro.mp4   # no pause at the end
 ```
 
 - Input: animated GIF, WebP or APNG, any video ffmpeg reads, or a still image with `--effect`.
@@ -112,6 +113,9 @@ uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a s
 - Interlaced video is deinterlaced, and video with non-square pixels keeps its real shape.
 - Avoid `--dither` for animation: it makes the glyphs crawl from frame to frame.
 - GIF cannot play faster than about 50 fps, so fast video drops some frames in `.gif`. Use `.mp4` or `.webp` for smooth 60 fps.
+- `--hold SECONDS` keeps the last frame on screen that long before the loop starts again (default 0, or 1.5 for the `matrix`, `decode` and `scan` effects).
+- `.mp4` is tagged as BT.709, so browsers show the exact `--bg` color and the video blends into a page of the same color. `--crf` sets the quality (default 23; lower is sharper and bigger). With `--font-size` 16 or more, 28 still looks clean and is about 30% smaller.
+- When it writes a file, it prints the path, size and length.
 
 ### Figures on a plain background
 
@@ -131,7 +135,7 @@ uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --
 
 ### Effects for still images
 
-`--effect NAME` turns one image into a 2–3 second intro at 25 fps that ends on the finished art and holds it for 1.5 seconds. Every effect works with every mode.
+`--effect NAME` turns one image into a 2–2.6 second animation at 25 fps that ends on the finished art. `matrix`, `decode` and `scan` then hold the art for 1.5 seconds; `glitch` and `wave` loop with no pause. `--hold SECONDS` changes the pause (`--hold 0` for none). Every effect works with every mode.
 
 - `matrix`: falling columns of glyphs with a bright head, leaving the art behind them.
 - `decode`: cells scramble through random glyphs and lock in, sweeping left to right.

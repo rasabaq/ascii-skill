@@ -25,10 +25,10 @@ def _lit(c):
     return c if max(c) > 60 else (150, 150, 150)  # dark cells get gray ink so rain over them shows
 
 
-def matrix(grid, n=80, rng=None, bg=(0, 0, 0), trail=10, **_):
+def matrix(grid, n=65, rng=None, bg=(0, 0, 0), trail=10, **_):
     """Falling columns of glyphs with a bright head; the art is left behind the trail."""
     rows, cols = len(grid), len(grid[0])
-    active = max(1, round(n * 0.8))  # last 20% holds the clean art
+    active = max(1, n - 1)  # the art is complete on the last frame; animate.py --hold keeps it on screen
     drops = []
     for _x in range(cols):
         delay = rng.uniform(0, active * 0.45)
@@ -57,10 +57,10 @@ def matrix(grid, n=80, rng=None, bg=(0, 0, 0), trail=10, **_):
     return out
 
 
-def decode(grid, n=60, rng=None, **_):
+def decode(grid, n=50, rng=None, **_):
     """Cells scramble through random glyphs and lock in, sweeping left to right."""
     rows, cols = len(grid), len(grid[0])
-    active = max(1, round(n * 0.8))
+    active = max(1, n - 2)  # the last cells lock and stop flashing on the last frame
     scramble = max(2, round(active * 0.3))
     span = active - scramble - 1
     lock = [[scramble + (0.75 * x / max(1, cols - 1) + rng.uniform(0, 0.25)) * span for x in range(cols)]
@@ -85,10 +85,10 @@ def decode(grid, n=60, rng=None, **_):
     return out
 
 
-def scan(grid, n=60, rng=None, glow=4, **_):
+def scan(grid, n=52, rng=None, glow=4, **_):
     """A bright CRT line sweeps down and types each row in, leaving a short glow."""
     rows, cols = len(grid), len(grid[0])
-    active = max(1, round(n * 0.85))
+    active = max(1, n - 1)
     out = []
     for f in range(n):
         pos = min(1.0, f / active) * (rows + glow)  # beam row, fractional part is typing progress
@@ -147,7 +147,7 @@ def wave(grid, n=50, rng=None, amp=3, **_):
     rows, cols = len(grid), len(grid[0])
     out = []
     for f in range(n):
-        env = math.sin(math.pi * f / max(1, n - 1)) ** 2 * amp
+        env = math.sin(math.pi * f / max(1, n - 1)) * amp  # not squared: only ~3 still frames at each end
         frame = []
         for y, row in enumerate(grid):
             dx = round(env * math.sin(2 * math.pi * (2 * f / n - y / 12)))
@@ -158,6 +158,7 @@ def wave(grid, n=50, rng=None, amp=3, **_):
     return out
 
 
+LOOPS = ("glitch", "wave")  # start and end on the art, so they loop with no hold
 EFFECTS = {"matrix": matrix, "decode": decode, "scan": scan, "glitch": glitch, "wave": wave}
 
 
