@@ -24,7 +24,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
+                   POSTER_BG, RETRO, poster_defaults, rgb, snap, snap_grid, to_ansi, to_png)
 import effects  # noqa: E402
 import post  # noqa: E402
 import scenes  # noqa: E402
@@ -347,7 +347,9 @@ def main(argv=None):
     p.add_argument("--contrast", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--brightness", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--invert", action="store_true", help="swap light and dark")
-    p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering (crawls between frames)")
+    p.add_argument("--dither", nargs="?", const="fs", choices=("fs", "bayer"),
+                   help="Floyd-Steinberg dithering (crawls between frames); --dither bayer holds still")
+    p.add_argument("--colors", choices=RETRO, help="snap every color to this retro palette")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (WebP/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color" % ", ".join(COLORS))
     p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4/HTML (default 12; tiles: 80; led: 26; dots: 20)")
@@ -443,7 +445,7 @@ def main(argv=None):
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
                            words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut)  # same seed: same layout
 
-        pal = a.palette
+        pal = RETRO[a.colors] if a.colors else a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker
             pick = images[::max(1, len(images) // 8)]
             sheet = Image.new("RGB", (pick[0].width, pick[0].height * len(pick)))
@@ -458,14 +460,16 @@ def main(argv=None):
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
             grids = effects.frames(grids[0], a.effect)
             durs = [1000 / effects.FPS] * (len(grids) - 1) + [HOLD_MS]
+        if a.colors:  # after the effect, so its glows land on the palette too
+            grids, fg = [snap_grid(g, a.colors, a.dither == "bayer") for g in grids], fg and snap(fg, a.colors)
         if ext in (".gif", ".webp", ".mp4"):
             cw = max(1, round(a.font_size * CELL_W))
             size = len(grids[0][0]) * cw * len(grids) * max(1, round(cw / a.aspect)) * len(grids[0]) * 4
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [post.apply(to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.mode), a.post,
-                              max(1, round(cw / a.aspect))) for g in grids]
+            out = [post.apply(to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.mode,
+                                     pure=bool(a.colors)), a.post, max(1, round(cw / a.aspect))) for g in grids]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps)
             else:

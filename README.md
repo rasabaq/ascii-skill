@@ -9,7 +9,7 @@ A free, open-source agent skill that turns images, GIFs and video into ASCII art
 - **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`
 - **Post effects:** `--post crt,bloom,chroma,scan,vignette,grain` for PNG, GIF, WebP and MP4, steady from frame to frame
 - **Outputs:** plain text, truecolor terminal, HTML, PNG, JPG, WebP, GIF, MP4
-- **Looks:** 7 character ramps or your own, photo colors or one ink color, black, white or transparent background, dithering, sharpening
+- **Looks:** 7 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), black, white or transparent background, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
 
 Python 3.9+ and Pillow. ffmpeg only for video.
 

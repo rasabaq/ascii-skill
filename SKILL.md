@@ -32,7 +32,9 @@ Paths below are relative to this skill's folder.
 | `--color` | Truecolor ANSI escape codes in text output (stdout or `.txt`). Uses `--fg` if given, else photo colors. |
 | `--invert` | Swap light and dark. |
 | `--contrast 1.0` `--brightness 1.0` | Factors on top of the automatic contrast stretch. `1.0` means no change. |
-| `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. |
+| `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. Put it after the image path (`--dither photo.jpg` reads the path as a dither name). |
+| `--dither bayer` | Ordered dithering with a fixed 8x8 pattern: the classic retro crosshatch. The pattern stays put from frame to frame, so it is safe for animation. With `--colors` it also dithers the colors. |
+| `--colors pico8` | Snap every color to a retro palette: `c64`, `pico8`, `gameboy` (4 greens), `cga` (black, cyan, magenta, white), `zx` (ZX Spectrum), `mono` (black and white). See "Retro palettes". |
 | `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). |
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
@@ -54,7 +56,7 @@ The script already stretches every image to its full tonal range, so most images
 ## Modes in short
 
 - `braille` ignores `-c`. Use it with `--dither` for photos and without it for logos. Colors follow the photo, or `--fg`.
-- `halfblock` ignores `-c`, `--dither` and `--fg`, because the colors are the picture. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
+- `halfblock` ignores `-c` and `--fg`, because the colors are the picture. It uses `--dither bayer` only with `--colors`. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
 - Terminals draw braille dots small, so braille looks dimmer there than in a PNG.
 - `led` and `dots` draw real round lamps or dots in PNG, GIF, WebP and MP4. Text, terminal and HTML output get the round glyphs `●•·` by size instead. Both ignore `--dither` and `--gap`.
 
@@ -85,6 +87,23 @@ uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white --fg black -o new
 - Dot colors come from the image, or all dots are `--fg`.
 - An image with a black background (a scene, a logo) on white paper: add `--invert`. It flips light and dark but keeps the colors, so an orange planet prints as dark orange.
 - Not the same as `-c dots`, which is a braille ramp.
+
+## Retro palettes
+
+`--colors NAME` makes the art look like an old computer or console. Every color is snapped to that machine's palette. Add `--dither bayer` for the classic crosshatch between palette colors.
+
+```bash
+uv run scripts/ascii.py photo.jpg --mode halfblock --colors pico8 --dither bayer -w 120 -o out.png
+uv run scripts/ascii.py photo.jpg --mode halfblock --colors gameboy --dither bayer -o out.png
+uv run scripts/ascii.py photo.jpg -c blocks --colors c64 --dither bayer -o out.png
+uv run scripts/animate.py --scene planet --mode halfblock --colors pico8 --dither bayer -o planet.gif
+```
+
+- `--mode halfblock` gives the most retro look: each half cell is one palette pixel.
+- Without `--dither bayer`, each color goes to the nearest palette color. Plain `--dither` only spreads brightness, not color.
+- The page defaults to the palette's darkest color, such as the Game Boy's dark green. Set `--bg` to change it.
+- PNG, GIF and WebP output add no other colors: glyph edges are not smoothed, and `░▒▓` are drawn as dot patterns.
+- `--fg` is snapped to the palette too. Tiles take their tile colors from the palette. Words mode ignores `--colors`.
 
 ## Tile poster
 
@@ -119,6 +138,7 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 - Photo mosaic in color: `-c detailed -w 160 -o out.html`
 - Best color photo in a terminal: `--mode halfblock --color`
 - Fine dot drawing: `--mode braille --dither --sharpen -o out.png`
+- PICO-8 look: `--mode halfblock --colors pico8 --dither bayer -o out.png`
 - Print-friendly: `--bg white -o out.png`
 - Tile poster: `--mode tiles -w 36 -o poster.png`
 - LED board: `--mode led -w 64 -o board.png`
@@ -141,7 +161,7 @@ Preset: `--mode halfblock -w 120 --post crt -o tv.png`
 
 ## Animation
 
-`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
+`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--colors`, `--dither`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
 
 ```bash
 uv run scripts/animate.py cat.gif                          # play in the terminal, Ctrl-C stops
@@ -156,7 +176,7 @@ uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a s
 - One tonal range (and in braille one dot threshold) is used for all frames, so brightness does not pump.
 - Still areas do not flicker: a pixel keeps its value until it changes by more than `--steady` (default 6, out of 255). Raise it to 16 or more for grainy film. `--steady 0` turns it off.
 - Interlaced video is deinterlaced, and video with non-square pixels keeps its real shape.
-- Avoid `--dither` for animation: it makes the glyphs crawl from frame to frame.
+- Avoid plain `--dither` for animation: it makes the glyphs crawl from frame to frame. `--dither bayer` holds still.
 - GIF cannot play faster than about 50 fps, so fast video drops some frames in `.gif`. Use `.mp4` or `.webp` for smooth 60 fps.
 
 ### Figures on a plain background
@@ -234,6 +254,10 @@ grid = convert(Image.open("cat.jpg"), width=80, charset="blocks", dither=True)
 # With mode="led" or "dots", pass the same mode to to_png to draw lamps or dots.
 print(to_text(grid))
 to_png(grid).save("cat_ascii.png")
+
+from ascii import snap_grid  # retro palette, as --colors c64 --dither bayer
+retro = snap_grid(convert(Image.open("cat.jpg"), width=80, dither="bayer"), "c64", ordered=True)
+to_png(retro, pure=True).save("cat_c64.png")  # pure: no blended edges, so only palette colors
 
 from effects import frames  # list of grids; the last one is `grid`
 intro = [to_png(g) for g in frames(grid, "decode")]

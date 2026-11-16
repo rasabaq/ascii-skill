@@ -126,6 +126,33 @@ assert "font:20px/1.200 " in page and "width:1.200em;text-align:center" in page 
 sq = to_png(tiles, font_size=40, aspect=1.0, gap=1)
 assert sq.size == (480, 480) and sq.getpixel((240, 250)) == (0, 0, 0) and sq.getpixel((242, 250)) == tiles[10][10][2], "gap"
 
+# Retro palettes: every color lands in the palette, in every mode, and the Bayer dither is tied to the pixel grid.
+from ascii import RETRO, bayer, snap_grid  # noqa: E402
+assert sorted(bayer(x, y) for x in range(8) for y in range(8)) == [(i + 0.5) / 64 for i in range(64)]
+assert bayer(3, 5) == bayer(11, 13), "repeats every 8 pixels"
+for name, pal in RETRO.items():
+    for mode in ("ramp", "braille", "halfblock", "tiles"):
+        for ordered in (False, True):
+            g = snap_grid(convert(poster, width=24, mode=mode, dither="bayer" if ordered else None), name, ordered)
+            assert {v for row in g for c in row for v in c[1:]} <= set(pal), (name, mode, ordered)
+assert snap_grid([[("@", (1, 2, 3))]], [(0, 0, 0), (9, 9, 9)]) == [[("@", (0, 0, 0))]], "any list of colors works"
+flat = snap_grid([[("@", (90, 90, 90))] * 16] * 16, "gameboy", ordered=True)
+assert len({c[1] for row in flat for c in row}) == 2, "a flat gray mixes the two nearest greens"
+assert all(row[:8] == row[8:] for row in flat) and flat[:8] == flat[8:], "the pattern repeats every 8 cells"
+assert flat == snap_grid([[("@", (90, 90, 90))] * 16] * 16, "gameboy", ordered=True), "and is the same every time"
+half = snap_grid([[("▀", (90, 90, 90), (90, 90, 90))] * 8] * 4, "gameboy", ordered=True)
+assert [c[1] for c in half[0]] == [c[1] for c in flat[0][:8]] and [c[2] for c in half[0]] == [c[1] for c in flat[1][:8]], \
+    "halfblock dithers top and bottom as two pixel rows"
+# Changing the left of an image leaves the dither on the right alone (Floyd-Steinberg would carry its error over).
+ramp = Image.linear_gradient("L").rotate(90).resize((200, 100))
+left = ramp.copy()
+left.paste(255, (0, 0, 60, 100))
+a, b = (convert(im, 40, "minimal", dither="bayer", autocontrast=False) for im in (ramp, left))
+assert [r[16:] for r in a] == [r[16:] for r in b] and a != b
+c, d = (convert(im, 40, "minimal", dither=True, autocontrast=False) for im in (ramp, left))
+assert [r[16:] for r in c] != [r[16:] for r in d]
+assert len(set(to_text(convert(gray, width=40, charset="minimal", dither="bayer")))) > 2, "bayer spreads levels too"
+
 # Size caps: huge widths are refused, tall strips are capped.
 assert len(convert(Image.new("L", (3, 2000)), width=40)) <= 1000
 tmp = os.path.join(tempfile.mkdtemp(), "in.png")
@@ -133,9 +160,17 @@ img.save(tmp)
 main([tmp, "-o", tmp + ".png"])  # happy path writes a file
 main([tmp, "--mode", "halfblock", "--sharpen", "-o", tmp + ".html"])
 assert os.path.getsize(tmp + ".png") > 0
+main([tmp, "--dither", "-o", tmp + ".fs.txt"])  # plain --dither is still Floyd-Steinberg
+assert open(tmp + ".fs.txt", encoding="utf-8").read() == to_text(convert(Image.open(tmp), dither=True))
+for argv in (["-c", "blocks"], ["--mode", "braille"], ["--mode", "halfblock"]):  # PNG adds no colors of its own
+    main([tmp, "--colors", "c64", "--dither", "bayer", "-o", tmp + ".c64.png"] + argv)
+    assert {c for _, c in Image.open(tmp + ".c64.png").getcolors()} <= set(RETRO["c64"]), argv
+main([tmp, "--colors", "gameboy", "-o", tmp + ".gb.png"])
+assert Image.open(tmp + ".gb.png").getpixel((0, 0)) == RETRO["gameboy"][0], "the page is the darkest green"
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
 assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
-for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"]):
+for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"],
+             ["--colors", "nope"], ["--dither", "ordered"]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main([tmp] + argv)  # each must fail with a clean usage error, not a traceback
