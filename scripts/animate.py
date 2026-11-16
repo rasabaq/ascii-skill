@@ -23,7 +23,7 @@ import time
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequence, ImageStat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
+from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, add_poster_args, convert,  # noqa: E402
                    POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
 import effects  # noqa: E402
 import scenes  # noqa: E402
@@ -54,7 +54,11 @@ def video_frames(path, a, px, cap):
     num, _, den = probe.stdout.strip().partition("/")
     if probe.returncode or not num:
         raise ValueError("cannot read %s: not an image or video" % path)
-    rate = a.fps or (float(num) / float(den or 1) if num != "0" else 25)
+    try:
+        rate = a.fps or float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):  # "N/A" or "x/0": the stream gives no frame rate
+        rate = 0
+    rate = rate if rate > 0 else 25
     # Deinterlace only frames flagged as interlaced (old TV and DV footage), and scale by the display shape:
     # some video stores non-square pixels (sample aspect ratio), which would squash the art.
     vf = "yadif=deint=interlaced," + ("fps=%g," % a.fps if a.fps else "") + \
@@ -100,24 +104,21 @@ def timeline(frames, start_ms, length_ms, fps, cap):
 
 
 def shared_lut(images, cutoff=1):
-    """One autocontrast lookup table (same math as ImageOps.autocontrast) over all frames, so brightness never pumps."""
-    hist = [sum(col) for col in zip(*(im.histogram() for im in images))]
-    lut = []
-    for c in range(3):
-        h = hist[c * 256:(c + 1) * 256]
-        cut, acc, lo, hi = sum(h) * cutoff // 100, 0, 0, 255
-        for lo in range(256):
-            acc += h[lo]
-            if acc > cut:
-                break
-        acc = 0
-        for hi in range(255, -1, -1):
-            acc += h[hi]
-            if acc > cut:
-                break
-        scale = 255 / (hi - lo) if hi > lo else 1
-        lut += [min(255, max(0, int((v - lo) * scale))) if hi > lo else v for v in range(256)]
-    return lut
+    """One autocontrast lookup table over all frames, so brightness never pumps. Like ImageOps.autocontrast with
+    preserve_tone: the range comes from brightness and all three channels share it, so hues do not shift."""
+    h = [sum(col) for col in zip(*(im.convert("L").histogram() for im in images))]
+    cut, acc, lo, hi = sum(h) * cutoff // 100, 0, 0, 255
+    for lo in range(256):
+        acc += h[lo]
+        if acc > cut:
+            break
+    acc = 0
+    for hi in range(255, -1, -1):
+        acc += h[hi]
+        if acc > cut:
+            break
+    scale = 255 / (hi - lo) if hi > lo else 1
+    return [min(255, max(0, int((v - lo) * scale))) if hi > lo else v for v in range(256)] * 3
 
 
 def background(images, cut, n=25):
@@ -303,6 +304,8 @@ def to_mp4(images, durs, path, fps):
 
 def play(texts, durs):
     out = sys.stdout
+    if hasattr(out, "reconfigure"):  # art is Unicode: never die on an ascii or cp1252 pipe
+        out.reconfigure(encoding="utf-8")
     out.write("\x1b[?25l\x1b[2J")
     try:
         due = time.monotonic()
@@ -361,21 +364,26 @@ def main(argv=None):
     poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
-    if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) \
+    if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) or a.subject_cut <= 0 \
             or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE):
-        p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, -w 1-%d" % MAX_SIDE)
+        p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --subject-cut > 0, "
+                "-w 1-%d" % MAX_SIDE)
+    if a.scene and (a.start or a.duration):
+        p.error("--start and --duration pick a slice of an input file; a --scene is one short loop")
     try:
         bg = "black" if a.bg == "none" else a.bg
         back = rgb(bg)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image
         px = 2 * SUBPIXELS[a.mode][0] * (a.width or MAX_SIDE // 2)  # 2x the sampled pixels; convert() does the final resize
-        if a.scene:  # frames drawn in code (scenes.py); --seed varies them, --fps keeps the loop length
+        if a.scene:  # frames drawn in code (scenes.py); --seed varies fire, waves, stars and rain; --fps keeps the loop length
             src = timeline(scenes.frames(a.scene, a.seed, a.fps), 0, 0, None, a.max_frames)
         else:
             try:
                 Image.open(a.input).close()
                 src = timeline(pil_frames(a.input, back, px), a.start * 1000, (a.duration or 0) * 1000, a.fps, a.max_frames)
             except Image.UnidentifiedImageError:
+                if os.path.splitext(a.input)[1].lower() in UNSUPPORTED:  # ffprobe would take an SVG as a video
+                    raise ValueError(UNSUPPORTED[os.path.splitext(a.input)[1].lower()])
                 src = timeline(video_frames(a.input, a, px, a.max_frames), 0, 0, None, a.max_frames)
         frames, truncated = src
         if not frames:
@@ -448,7 +456,7 @@ def main(argv=None):
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps)
             else:
-                # GIF ticks are 10 ms and browsers slow frames under 20 ms, so 60 fps becomes ~40 fps.
+                # GIF ticks are 10 ms and browsers slow frames under 20 ms, so frames snap to 20 ms or more: 60 fps becomes ~50 fps.
                 out, durs = snap(out, durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
                 out[0].save(a.output, save_all=True, append_images=out[1:], duration=durs, loop=0,
                             **({"lossless": True} if ext == ".webp" else {}))
