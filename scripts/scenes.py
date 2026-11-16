@@ -81,13 +81,14 @@ def _unit(v):
 @scene(320, 240, 80, 25)
 def fire(w, h, n, seed):
     """Cellular fire: random embers in the bottom row, and every step each cell becomes the average of
-    the cells under it, minus a little cooling, so heat rises and fades into flame tongues.
-    The embers repeat every n steps and a cell only remembers one grid height of history, so after a
-    warm-up the flames repeat every n frames: a seamless loop."""
+    the cells under it, minus a little cooling, so heat rises and fades into flame tongues. Cooling
+    grows with height and toward the sides, so the fire tapers to a point, and it sits on a glowing
+    bed of embers. The embers repeat every n steps and a cell only remembers one grid height of
+    history, so after a warm-up the flames repeat every n frames: a seamless loop."""
     gw, gh = max(8, w // 3), max(8, h // 3) + 2  # the 2 bottom rows (raw embers) are cut off
     rng = random.Random(seed)
-    edge = max(1, gw // 4)  # embers fade out at the sides, so the fire has a shape
-    reach = [min(1, (x + 1) / edge, (gw - x) / edge) for x in range(gw)]
+    edge, side = max(1, gw // 4), gw // 10  # embers fade out toward the sides, so the fire has a shape
+    reach = [max(0, min(1, (x + 1 - side) / edge, (gw - x - side) / edge)) for x in range(gw)]
     embers, x = [[0] * gw for _ in range(n)], 0
     while x < gw:  # clumps of 2-4 columns that stay hot or dark for a few frames make flame tongues
         width, t = rng.randint(2, 4), 0
@@ -107,8 +108,21 @@ def fire(w, h, n, seed):
     noise = ImageOps.autocontrast(tiled.filter(ImageFilter.GaussianBlur(1.5)).crop((gw, n, 2 * gw, 2 * n)))
     mean = 255 * 1.4 / gh  # flames reach about 3/4 of the way up
     cool = [round(mean * 3 * (v / 255) ** 2) for v in noise.tobytes()]
+    taper = [round(mean * (0.5 * (1 - y / gh) ** 2 + 2 * ((x - gw / 2) / gw) ** 2 * (1 - y / gh)))
+             for y in range(gh) for x in range(gw)]  # more cooling up high and off to the sides
     lut = _lut([(0, (0, 0, 0)), (0.1, (90, 0, 0)), (0.3, (220, 45, 0)), (0.5, (255, 125, 0)),
                 (0.7, (255, 205, 50)), (0.9, (255, 250, 200)), (1, (255, 255, 255))])
+    # The ember bed: a low mound across the bottom, glowing in two blotchy patterns that cross-fade
+    # once per loop. It is mixed in as heat, so it shares the flame colors and meets them smoothly.
+    bh = max(4, round(0.13 * h))
+    mound = Image.new("L", (w, h))
+    ImageDraw.Draw(mound).ellipse((0.08 * w, h - bh, 0.92 * w, h + bh), fill=255)
+    mound = mound.filter(ImageFilter.GaussianBlur(max(1, h / 60)))
+    bed = []
+    for _ in range(2):
+        spots = Image.frombytes("L", (max(4, w // 10), max(4, h // 10)), rng.randbytes(max(4, w // 10) * max(4, h // 10)))
+        spots = ImageOps.autocontrast(spots.resize((w, h), Image.Resampling.BICUBIC).filter(ImageFilter.GaussianBlur(1)))
+        bed.append(spots.point(lambda v: 30 + 170 * (v / 255) ** 1.5))  # dark red cracks, orange coals
     heat = [0] * (gw * gh)
     out, warm = [], (gh // n + 1) * n  # at least one grid height, ending on a multiple of n
     last = (gh - 1) * gw
@@ -119,54 +133,124 @@ def fire(w, h, n, seed):
             row, b1, b2, c = y * gw, (y + 1) * gw, min(y + 2, gh - 1) * gw, (y + step) % n * gw
             for x in range(gw):
                 v = (heat[b1 + x - 1 if x else b1] + heat[b1 + x] + heat[b1 + x + 1 if x < gw - 1 else b1 + x]
-                     + heat[b2 + x]) // 4 - cool[c + x]
+                     + heat[b2 + x]) // 4 - cool[c + x] - taper[row + x]
                 new[row + x] = v if v > 0 else 0
         heat = new
         if step >= warm:
-            g = Image.frombytes("L", (gw, gh - 2), bytes(heat[:gw * (gh - 2)]))
-            out.append(_colorize(g.resize((w, h), Image.Resampling.BICUBIC), lut))
+            # A cell shows no brighter than its brightest neighbor below, plus a little: hot patches cut
+            # off from the flames below fade out instead of floating away as blobs.
+            show = heat[:]
+            for y in range(gh - 2, -1, -1):
+                row, b = y * gw, (y + 1) * gw
+                for x in range(gw):
+                    below = max(show[b + max(0, x - 1):b + x + 2])
+                    if show[row + x] > below + 4:
+                        show[row + x] = below + 4
+            g = Image.frombytes("L", (gw, gh - 2), bytes(show[:gw * (gh - 2)]))
+            glow = Image.blend(bed[0], bed[1], 0.5 - 0.5 * math.cos(TAU * (step - warm) / n))
+            out.append(_colorize(Image.composite(glow, g.resize((w, h), Image.Resampling.BICUBIC), mound), lut))
     return out
 
 
 @scene(320, 240, 80, 25)
 def donut(w, h, n, seed):
-    """A frosted torus tumbling in light. Small flat-shaded quads drawn back to front (painter's
-    algorithm), with diffuse and specular light, so the brightness alone shows its shape."""
-    big, small, nu, nv = 1.0, 0.48, 80, 40
+    """A frosted donut with sprinkles, spinning and rocking in light. Small flat-shaded quads drawn back
+    to front (painter's algorithm), with diffuse and specular light, so the brightness alone shows its
+    shape. Pink icing with drips sits on top, so the golden dough shows on the sides and underneath."""
+    rng = random.Random(seed)
+    big, small, nu, nv = 1.0, 0.48, 192, 72
     dist = 4.2
-    f = 0.4 * h * SS * dist / (big + small)
+    f = 0.45 * h * SS * dist / (big + small)
     light = _unit((-0.5, 0.8, -1))
     half = _unit((light[0], light[1], light[2] - 1))
-    verts, quads = [], []
+    drips = [(rng.uniform(0, TAU), rng.uniform(0.04, 0.09), rng.uniform(0.25, 0.5)) for _ in range(14)]
+
+    def edge(a):
+        """Lowest sin(tube angle) the icing reaches at ring angle a: a wavy line with drips hanging off it."""
+        e = 0.3 + 0.06 * math.sin(5 * a + 1) + 0.04 * math.sin(11 * a)
+        for at, width, depth in drips:
+            gap = math.remainder(a - at, TAU) / width
+            e -= depth * math.exp(-gap * gap)
+        return e
+
+    def point(a, b, lift=0.0):
+        r = big + (small + lift) * math.cos(b)
+        return r * math.cos(a), r * math.sin(a), (small + lift) * math.sin(b)
+
+    def cut(poly, side):
+        """The part of a polygon of (a, b, value) corners where side(value) >= 0, split along the line."""
+        out = []
+        for p, q in zip(poly, poly[1:] + poly[:1]):
+            sp, sq = side(p[2]), side(q[2])
+            if sp >= 0:
+                out.append(p)
+            if (sp >= 0) != (sq >= 0):
+                out.append(tuple(x + (y - x) * sp / (sp - sq) for x, y in zip(p, q)))
+        return out
+
+    # Icing on top, a pale baked ring under its edge, golden dough below. Quads that cross a border
+    # are split along it, so the borders are smooth curves and not steps.
+    layers = ((0, 9, (255, 150, 200)), (-0.12, 0, (250, 215, 150)), (-9, -0.12, (205, 125, 50)))
+    verts = [point(TAU * i / nu, TAU * j / nv) for i in range(nu) for j in range(nv)]
+    quads = []
     for i in range(nu):
         for j in range(nv):
-            a, b = TAU * i / nu, TAU * j / nv
-            verts.append(((big + small * math.cos(b)) * math.cos(a), (big + small * math.cos(b)) * math.sin(a),
-                          small * math.sin(b)))
             a, b = TAU * (i + 0.5) / nu, TAU * (j + 0.5) / nv  # quad center and its normal
             nrm = (math.cos(a) * math.cos(b), math.sin(a) * math.cos(b), math.sin(b))
-            icing = nrm[2] > 0.1 * math.sin(7 * a) - 0.15  # frosting on the top side, with a wavy edge
-            idx = [i * nv + j, ((i + 1) % nu) * nv + j, ((i + 1) % nu) * nv + (j + 1) % nv, i * nv + (j + 1) % nv]
-            ctr = ((big + small * math.cos(b)) * math.cos(a), (big + small * math.cos(b)) * math.sin(a), small * nrm[2])
-            quads.append((idx, ctr, nrm, (250, 125, 180) if icing else (220, 150, 75)))
+            ctr = point(a, b)
+            corners = [(TAU * ii / nu, TAU * jj / nv) for ii, jj in ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))]
+            poly = [(ca, cb, math.sin(cb) - edge(ca)) for ca, cb in corners]
+            for lo, hi, col in layers:
+                if all(lo <= v < hi for _a, _b, v in poly):
+                    idx = [i * nv + j, (i + 1) % nu * nv + j, (i + 1) % nu * nv + (j + 1) % nv, i * nv + (j + 1) % nv]
+                    quads.append((idx, ctr, nrm, col, 0.0))
+                    break
+                piece = cut(cut(poly, lambda v: v - lo), lambda v: hi - v)
+                if len(piece) > 2:
+                    quads.append((list(range(len(verts), len(verts) + len(piece))), ctr, nrm, col, 0.0))
+                    verts += [point(pa, pb) for pa, pb, _v in piece]
+    inks = [(255, 255, 255), (60, 80, 230), (255, 230, 40), (40, 170, 80), (130, 50, 190), (255, 255, 255)]
+    sprinkles = 0
+    while sprinkles < 75:  # short bars lying on the icing, a little above it
+        a, b = rng.uniform(0, TAU), rng.uniform(0, math.pi)
+        if math.sin(b) < edge(a) + 0.15:
+            continue
+        nrm = (math.cos(a) * math.cos(b), math.sin(a) * math.cos(b), math.sin(b))
+        ta, tb = (-math.sin(a), math.cos(a), 0.0), (-math.cos(a) * math.sin(b), -math.sin(a) * math.sin(b), math.cos(b))
+        turn = rng.uniform(0, TAU)
+        along = tuple(math.cos(turn) * p + math.sin(turn) * q for p, q in zip(ta, tb))
+        across = tuple(-math.sin(turn) * p + math.cos(turn) * q for p, q in zip(ta, tb))
+        c = point(a, b, 0.02)
+        corners = [tuple(c[k] + u * 0.095 * along[k] + v * 0.034 * across[k] for k in range(3))
+                   for u, v in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        idx = list(range(len(verts), len(verts) + 4))
+        verts += corners
+        quads.append((idx, c, nrm, rng.choice(inks), 0.06))  # drawn just after the icing under it
+        sprinkles += 1
     out = []
     for k in range(n):
         t = k / n
-        m = _rot(TAU * t + 0.9, 0.35, TAU * t)
+        # Spin once around the donut's own axis, then tilt it toward the camera: seen from above,
+        # rocking between three-quarter and nearly side-on.
+        spin = _rot(0, 0, TAU * t)
+        view = _rot(math.pi + 1.15 + 0.3 * math.sin(TAU * t), 0.35 * math.sin(TAU * t + 1.2), 0.25 * math.cos(TAU * t))
+        m = tuple(zip(*[_apply(view, col) for col in zip(*spin)]))
         pts = []
         for p in verts:
             x, y, z = _apply(m, p)
             d = f / (z + dist)
             pts.append((w * SS / 2 + x * d, h * SS / 2 - y * d))
         faces = []
-        for idx, ctr, nrm, col in quads:
+        for idx, ctr, nrm, col, bias in quads:
             c, nn = _apply(m, ctr), _apply(m, nrm)
-            if c[0] * nn[0] + c[1] * nn[1] + (c[2] + dist) * nn[2] >= 0:  # faces away from the camera
+            facing = (c[0] * nn[0] + c[1] * nn[1] + (c[2] + dist) * nn[2]) / math.dist(c, (0, 0, -dist))
+            if facing >= (-0.3 if bias else 0):  # faces away from the camera; sprinkles also hide edge-on
                 continue
             dif = nn[0] * light[0] + nn[1] * light[1] + nn[2] * light[2]
             spec = max(0.0, nn[0] * half[0] + nn[1] * half[1] + nn[2] * half[2]) ** 30
             s = 0.4 + 0.6 * (0.5 + 0.5 * dif) ** 2  # never too dark, so braille dots still show the back
-            faces.append((c[2], [pts[q] for q in idx], tuple(min(255, round(v * s + 255 * 0.6 * spec)) for v in col)))
+            faces.append((c[2] - bias, [pts[q] for q in idx],
+                          tuple(min(255, round(v * s + 255 * 0.5 * spec)) for v in col)))
         im = Image.new("RGB", (w * SS, h * SS))
         draw = ImageDraw.Draw(im)
         for _z, poly, col in sorted(faces, key=lambda fc: -fc[0]):
@@ -408,31 +492,53 @@ def rain(w, h, n, seed):
 
 @scene(320, 240, 50, 25)
 def bounce(w, h, n, seed):
-    """A shaded ball bouncing in place: parabolic height, squash at the floor, stretch at speed."""
+    """A shaded ball bouncing in place in a room: parabolic height, squash at the floor, stretch at
+    speed, and a soft shadow on a tiled floor that gets darker and sharper as the ball comes down."""
+    W, H = w * SS, h * SS
     bounces = 2
-    r0 = 0.15 * h * SS
-    ground = 0.86 * h * SS
-    jump = 0.58 * h * SS
-    cx = w * SS / 2
+    r0 = 0.2 * H
+    horizon, ground = 0.58 * H, 0.9 * H
+    jump = ground - 2 * r0 - 0.06 * H
+    cx = W / 2
+    # The room: a wall that darkens upward, a floor that lightens toward us, and floor tiles in
+    # perspective that fade out before the horizon, where they would get too fine to read.
+    grad = Image.new("L", (1, H))
+    grad.putdata([round(255 * (y / horizon if y < horizon else (y - horizon) / (H - horizon))) for y in range(H)])
+    grad = grad.resize((W, H))
+    floor = Image.new("L", (W, H))
+    ImageDraw.Draw(floor).rectangle((0, horizon, W, H), fill=255)
+    room = Image.composite(_colorize(grad, _lut([(0, (26, 24, 42)), (1, (58, 53, 82))])),
+                           _colorize(grad, _lut([(0, (2, 2, 6)), (1, (34, 30, 52))])), floor)
+    tiles = Image.new("L", (W, H))
+    draw = ImageDraw.Draw(tiles)
+    for i in range(-8, 9):
+        draw.line([(cx, horizon), (cx + (i + 0.5) * 0.36 * W, H)], fill=255, width=2 * SS)
+    for i in range(1, 12):
+        y = horizon + (H - horizon) / (1 + 0.55 * i)
+        draw.line([(0, y), (W, y)], fill=255, width=2 * SS)
+    draw.rectangle((0, 0, W, horizon), fill=0)  # no line ends poking up into the wall
+    tiles = Image.composite(tiles, Image.new("L", (W, H)), grad.point(lambda v: round(170 * (v / 255) ** 1.5)))
+    room = Image.composite(Image.new("RGB", (W, H), (165, 155, 215)), room, tiles)
     out = []
     for k in range(n):
         t = k / n
         u = (bounces * t) % 1.0
         height = 4 * u * (1 - u)
         contact = max(0.0, 1 - min(u, 1 - u) / 0.06)  # 1 at the floor, 0 a little above it
-        sy = 1 - 0.22 * contact + 0.15 * abs(1 - 2 * u) * (1 - contact)
+        sy = 1 - 0.22 * contact + 0.1 * abs(1 - 2 * u) * (1 - contact)
         sx = 1 / sy
         bottom = ground - height * jump
         rx, ry = r0 * sx, r0 * sy
         cy = bottom - ry
-        im = Image.new("RGB", (w * SS, h * SS))
+        im = room.copy()
+        shadow = Image.new("L", (W, H))
+        sw = r0 * (0.85 + 0.5 * height)
+        ImageDraw.Draw(shadow).ellipse((cx - sw, ground - 0.2 * sw, cx + sw, ground + 0.2 * sw),
+                                       fill=round(235 * (1 - 0.55 * height)))
+        im.paste((0, 0, 0), mask=shadow.filter(ImageFilter.GaussianBlur(SS * (1.5 + 10 * height))))
         draw = ImageDraw.Draw(im)
-        draw.line([(0, ground), (w * SS, ground)], fill=(150, 140, 175), width=2 * SS)
-        sw = r0 * (1.3 - 0.6 * height)
-        shade = round(30 + 40 * (1 - height))
-        draw.ellipse((cx - sw, ground - 0.18 * sw, cx + sw, ground + 0.18 * sw), fill=(shade, shade, shade + 6))
-        for i in range(24):  # concentric ellipses toward the highlight make a lit sphere
-            q = i / 23
+        for i in range(40):  # concentric ellipses toward the highlight make a lit sphere
+            q = i / 39
             ex, ey = cx - 0.35 * rx * q, cy - 0.4 * ry * q
             a, b = rx * (1 - 0.85 * q), ry * (1 - 0.85 * q)
             lum = 0.45 + 0.55 * q
