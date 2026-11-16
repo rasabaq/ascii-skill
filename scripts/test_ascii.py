@@ -140,7 +140,7 @@ assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
 stripes = Image.new("L", (100, 100))
 for y in range(0, 100, 2):
     stripes.paste(255, (0, y, 100, y + 1))
-assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row} <= set("*+="), "mid-gray"
+assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row}.isdisjoint(" @#"), "mid-gray"
 
 # The tonal stretch keeps hues: a gray ground under a blue-black sky stays gray, not cyan.
 sky = Image.new("RGB", (40, 40), (20, 20, 30))

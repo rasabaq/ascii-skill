@@ -20,20 +20,23 @@ import sys
 
 from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
-# Ramps go from densest to emptiest glyph.
+# Ramps go from densest to emptiest glyph, sorted by measured ink (Menlo).
 CHARSETS = {
-    "standard": "@%#*+=-:. ",
-    "detailed": "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ",
+    "standard": "@#%*=+:-. ",
+    "detailed": "@0MWBQ8#O&mqpdb$U%XaZwkhoInuC1{}YJ*xfjtzLiv[]lc?<>|)(/\\+r;\"^!~:,_-.'` ",
     "blocks": "█▓▒░ ",
     "terminal": "@#o=-. ",
     "minimal": "#+. ",
-    "binary": "10 ",
+    "binary": "01 ",
     "dots": "⣿⣷⣯⣟⡿⢿⣻⣽⣾⣶⣦⣤⣀⡀ ",
 }
 COLORS = {"matrix": "#00ff41", "amber": "#ffb000", "cyan": "#00e5ff", "magenta": "#ff3df2", "mint": "#9dffb0"}
 # Monospace first, then fonts that cover braille and other symbols.
 FONTS = ["Menlo.ttc", "DejaVuSansMono.ttf", "consola.ttf", "LiberationMono-Regular.ttf", "cour.ttf",
          "Courier.ttc", "Apple Symbols.ttf", "seguisym.ttf", "DejaVuSans.ttf", "NotoSansSymbols2-Regular.ttf"]
+TONE = 1.25  # ink adds light linearly but eyes see it as a curve; higher values crush dark photos
+LOCAL = 35  # % of local contrast (a wide unsharp mask) in ramp and shape mode: lifts faces out of dark, flat scenes
+SATURATION = 1.25  # thin glyphs look paler than the photo, so their ink is a little more saturated (1 = unchanged)
 SHADES = {"█": 1.0, "▓": 0.75, "▒": 0.5, "░": 0.25}  # drawn as solid cells in PNG, so no font bleed
 MAX_SIDE = 1000  # ponytail: hard cap on columns and rows; bigger grids eat GBs and nobody can read them
 CELL_W = 0.6  # monospace advance in em
@@ -122,6 +125,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     if autocontrast:
         img = ImageOps.autocontrast(img, cutoff=1, preserve_tone=True)  # full tonal range, same hues: dim photos still read
     img = ImageEnhance.Brightness(ImageEnhance.Contrast(img).enhance(contrast)).enhance(brightness)
+    if LOCAL and mode in ("ramp", "shape"):
+        img = img.filter(ImageFilter.UnsharpMask(radius=img.width / 12, percent=LOCAL, threshold=0))
 
     rows = round(width * img.height / img.width * aspect)
     if rows > MAX_SIDE:  # very tall image: shrink width to keep the shape
@@ -144,7 +149,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
 
     # Ink density per pixel: on a dark background bright pixels get dense glyphs.
     top = 1 if mode == "braille" else len(ramp) - 1
-    levels = [(v if dark_bg != invert else 255 - v) / 255 * top for v in small.convert("L").tobytes()]
+    g = 1 if mode == "braille" else TONE  # braille thresholds dots at the mean instead
+    levels = [((v / 255) ** g if dark_bg != invert else 1 - (v / 255) ** g) * top for v in small.convert("L").tobytes()]
     # Braille dots without dither: threshold at the image's mean, so mid-tone ink (a blue logo) still shows.
     if cut is None:
         cut = min(0.75, max(0.25, sum(levels) / len(levels))) if mode == "braille" and not dither else 0.5
@@ -167,6 +173,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         else:
             ch = chars[i]
         c = raw[i * 3:i * 3 + 3]
+        mean = sum(c) / 3
+        c = [min(255, max(0, mean + (v - mean) * SATURATION)) for v in c]
         # The glyph already shows brightness, so keep the hue but make the ink readable on the background.
         peak = max(c) or 1
         scale = max(peak, 200) / peak if dark_bg else min(peak, 150) / peak
