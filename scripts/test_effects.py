@@ -36,5 +36,7 @@ hb = [[("▀", (200, 10, 10), (10, 10, 200)) for _ in range(12)] for _ in range(
 for name in EFFECTS:
     fr = frames(hb, name)
     assert fr[-1] == hb, name
-    assert any(len(c) == 3 for f in fr[:-1] for row in f for c in row), name  # not only the last frame
+    assert all(len(c) == 3 for f in fr[:-1] for row in f for c in row if c[0] != " "), name  # glyphs keep the bottom color
+    if name in ("matrix", "scan"):  # art not shown yet is blank, not a block of the bottom color
+        assert any(c[0] == " " and len(c) == 2 for f in fr[:-1] for row in f for c in row), name
 print("ok halfblock")

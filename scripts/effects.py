@@ -158,6 +158,15 @@ def wave(grid, n=50, rng=None, amp=3, **_):
     return out
 
 
+def _second(c, g):
+    """Effect cell `c` (char, color) at the place of art cell `g`, with g's second color when g has one."""
+    if len(g) < 3 or c[0] == " ":
+        return c
+    if c[0] == g[0] and c[1] != g[1]:  # same glyph, recolored (a glow): shift the second color the same way
+        return c + (tuple(min(255, max(0, b + n - o)) for b, n, o in zip(g[2], c[1], g[1])),) + g[3:]
+    return c + g[2:]
+
+
 EFFECTS = {"matrix": matrix, "decode": decode, "scan": scan, "glitch": glitch, "wave": wave}
 
 
@@ -173,13 +182,14 @@ def frames(grid, effect, n=None, seed=0, **opts):
     kw = dict(opts, rng=random.Random(seed))
     if n is not None:
         kw["n"] = n
-    # Effects work on (char, color) cells. Two-color cells (halfblock) get their second color back
-    # wherever an effect shows the original cell: same object (moved cells) or same value in place.
+    # Effects work on (char, color) cells. Two-color cells (halfblock, tiles) get their second color back:
+    # a moved original cell (same object) brings its own, any other glyph takes the one of its place (see _second),
+    # and a blank the effect made (art not shown yet) stays blank.
     flat = [[cell[:2] for cell in row] for row in grid]
     orig = {id(f): g for frow, grow in zip(flat, grid) for f, g in zip(frow, grow) if len(g) > 2}
     out = EFFECTS[effect](flat, **kw)
     if orig:
-        out = [[[orig.get(id(c), grid[y][x] if c == flat[y][x] else c) for x, c in enumerate(row)]
-                for y, row in enumerate(fr)] for fr in out]
+        out = [[[orig.get(id(c)) or _second(c, grid[y][x]) for x, c in enumerate(row)] for y, row in enumerate(fr)]
+               for fr in out]
     out[-1] = [list(row) for row in grid]  # settle exactly on the art, even for tiny n
     return out
