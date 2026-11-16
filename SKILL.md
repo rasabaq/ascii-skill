@@ -141,11 +141,11 @@ uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --
 
 ### Scenes
 
-`--scene NAME` draws a looping animation in code, so no input file is needed. Each loop is 2 to 3.2 seconds, and the last frame flows into the first. Every mode, color option and output works. `--seed N` gives another variant (fire, waves, stars, rain), and `--fps` changes smoothness but keeps the loop length.
+`--scene NAME` draws a looping animation in code, so no input file is needed. Each loop is 2 to 3.2 seconds, and the last frame flows into the first. Every mode, color option and output works. `--seed N` gives another variant (fire, waves, stars, rain, city, tree, planet), and `--fps` changes smoothness but keeps the loop length.
 
 ```bash
 uv run scripts/animate.py --scene fire -o fire.gif                       # rising flames, warm colors
-uv run scripts/animate.py --scene donut -o donut.gif                     # a spinning, lit, frosted donut
+uv run scripts/animate.py --scene donut -o donut.gif                     # a frosted donut with sprinkles, spinning
 uv run scripts/animate.py --scene cube --mode braille -o cube.gif        # a tumbling cube with bright edges
 uv run scripts/animate.py --scene waves --mode halfblock -o waves.gif    # ocean swell under the moon
 uv run scripts/animate.py --scene stars -o stars.gif                     # flying through a starfield
@@ -153,6 +153,10 @@ uv run scripts/animate.py --scene walker --mode braille -o run.gif       # a sti
 uv run scripts/animate.py --scene rain --mode braille -o rain.gif        # rain with splashes
 uv run scripts/animate.py --scene bounce --mode halfblock -o ball.gif    # a ball that squashes as it bounces
 uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the word ASCII riding a rainbow wave
+uv run scripts/animate.py --scene city --mode halfblock -o city.gif      # night skyline in parallax, a train on a bridge
+uv run scripts/animate.py --scene tree --mode halfblock -o tree.gif      # an autumn tree swaying, leaves falling
+uv run scripts/animate.py --scene planet --mode halfblock -o planet.gif  # a ringed planet with turning bands and two moons
+uv run scripts/animate.py --scene gears --mode braille -o gears.gif      # a clockwork: meshing gears, pendulum, escapement
 ```
 
 - Use `-w 60` to `-w 100`. `--mode halfblock` gives the best color; `--mode braille` gives the crispest lines.

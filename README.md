@@ -5,7 +5,7 @@ A free, open-source agent skill that turns images, GIFs and video into ASCII art
 - **Six modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster) and `tiles` (a square-tile poster)
 - **Moving ASCII:** GIF, WebP, APNG or any video in; GIF, WebP, MP4, an HTML player or terminal playback out. `--subject` keeps only what moves (still camera), and still areas do not flicker
 - **From a description:** `fetch.py "running horse"` finds a freely licensed clip on Wikimedia Commons and prints its attribution
-- **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, all looping
+- **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `city`, `tree`, `planet`, `gears`, all looping
 - **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`
 - **Outputs:** plain text, truecolor terminal, HTML, PNG, JPG, WebP, GIF, MP4
 - **Looks:** 7 character ramps or your own, photo colors or one ink color, black, white or transparent background, dithering, sharpening
