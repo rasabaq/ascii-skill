@@ -354,7 +354,7 @@ def main(argv=None):
     p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering (crawls between frames)")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (WebP/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color" % ", ".join(COLORS))
-    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4/HTML (default 12; tiles: 80)")
+    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4 (default 12; tiles: 80); HTML fills its box's width")
     p.add_argument("--fps", type=float, help="resample to this frame rate (default: keep source timing)")
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
@@ -462,7 +462,7 @@ def main(argv=None):
                 raise ValueError("--effect needs a still image, not an animation")
             if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
-            grids = effects.frames(grids[0], a.effect)
+            grids = effects.frames(grids[0], a.effect, bg=back)
             durs = [1000 / effects.FPS] * len(grids)
         hold = a.hold if a.hold is not None else 1.5 if a.effect and a.effect not in effects.LOOPS else 0
         durs[-1] += hold * 1000

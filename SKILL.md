@@ -45,6 +45,10 @@ The script already stretches every image to its full tonal range, so most images
 - Photos: `-c blocks --dither` gives the most recognizable faces and animals.
 - Dark subject (black dog, night scene) disappears on the black background: use `--bg white`. Raising `--brightness 1.5` also helps. Raising contrast makes dark scenes worse.
 - Dark logo on a white background shows as a solid block: add `--bg white` (or `--invert` for terminal output).
+- Light picture with a darker subject (a print, a painting, a drawing on paper): use the "Print or light page" preset below. Braille with one dark `--fg` ink on a light `--bg` looks like a woodblock print. Leave out `--dither` here: it fills the paper with stray dots.
+- A light `--bg` (like `white`) keeps the photo's colors, so pale parts of the picture almost vanish into the page. Add a dark `--fg` too.
+- In braille mode, small `--brightness` steps like `1.2` barely change the result. Try `1.5` or more.
+- `-c detailed` turns busy pictures into letter soup. Use it for simple subjects and `--mode braille` for busy ones.
 - Want more detail at the same width: `--mode braille --dither --sharpen` for line-art style, `--mode halfblock` for a color photo.
 - Too much noise: use fewer columns or a shorter ramp (`-c minimal`).
 - Banding in gradients: add `--dither`.
@@ -87,10 +91,11 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 
 - Matrix: `-c binary --fg matrix -o out.png`
 - Retro amber terminal: `-c terminal --fg amber -o out.png`
-- Photo mosaic in color: `-c detailed -w 160 -o out.html`
+- Photo mosaic in color (simple subjects): `-c detailed -w 160 -o out.html`
 - Best color photo in a terminal: `--mode halfblock --color`
 - Fine dot drawing: `--mode braille --dither --sharpen -o out.png`
-- Print-friendly: `--bg white -o out.png`
+- Print-friendly: `--bg white --fg black -o out.png`
+- Print or light page (prints, paintings, line art on paper): `--mode braille --sharpen --brightness 1.6 -w 200 --bg "#f3ead8" --fg "#1d3557" -o out.png`. No `--dither`.
 - Tile poster: `--mode tiles -w 36 -o poster.png`
 
 ## Animation

@@ -107,7 +107,7 @@ def player_durs(args):
     with contextlib.redirect_stdout(io.StringIO()) as said:
         main(args + ["-o", path])
     assert said.getvalue().startswith("wrote %s (" % path), said.getvalue()  # says where the file went
-    return json.loads(re.search(r"const \[F, I, D\] = (.*), a =", open(path, encoding="utf-8").read()).group(1))[2]
+    return json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", open(path, encoding="utf-8").read()).group(1))[3]
 
 
 # --hold: intros hold the art 1.5 s by default, loops (wave, glitch) and --hold 0 restart at once.
