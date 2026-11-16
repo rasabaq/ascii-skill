@@ -13,7 +13,7 @@ import colorsys
 import math
 import random
 
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from ascii import font
 
@@ -461,5 +461,144 @@ def text(w, h, n, seed, word="ASCII"):
             col = tuple(round(v * 255) for v in colorsys.hsv_to_rgb((t + i / len(word)) % 1.0, 0.75, 1.0))
             draw.text((x + cw / 2, y), ch, font=ft, fill=col, anchor="mm", stroke_width=round(size / 20), stroke_fill=col)
             x += cw + gap
+        out.append(_shrink(im, w, h))
+    return out
+
+
+@scene(320, 240, 80, 25)
+def planet(w, h, n, seed):
+    """A ringed gas giant with two moons. The light, rings and shadows never change, so one pass over
+    the pixels works them out once: where the view ray meets the sphere and the ring plane, which is
+    nearer, the light on the disc, the ring's shadow on the disc and the planet's shadow on the ring.
+    Each frame then only shifts the longitude of the cloud texture (it repeats twice around the
+    planet and turns half a turn per loop) and moves the moons, which hide pixel by pixel behind
+    whatever is nearer."""
+    rng = random.Random(seed)
+    W, H = w * SS, h * SS
+    R = 0.22 * min(h, 0.75 * w) * SS  # planet radius in pixels; the rest is in planet radii
+    cx, cy = W / 2, H / 2
+    m = _rot(math.radians(22), 0, math.radians(-14))  # pole tipped 22 deg toward us, then rolled
+    mt = tuple(zip(*m))  # camera -> planet frame
+    pole = (m[0][1], m[1][1], m[2][1])
+    light = _unit((-0.85, 0.35, 0.35))
+    nl = sum(a * b for a, b in zip(pole, light))  # > 0: we see the lit face of the rings
+    r0, r1 = 1.24, 2.3
+    ring = [v / 255 for (v,) in _lut([(0, (0,)), (0.03, (60,)), (0.24, (90,)), (0.26, (200,)), (0.4, (250,)),
+                                     (0.47, (205,)), (0.56, (255,)), (0.62, (235,)), (0.64, (0,)),
+                                     (0.76, (0,)), (0.78, (190,)), (0.97, (165,)), (1, (0,))])]
+
+    def dens(rho):
+        return ring[int((rho - r0) / (r1 - r0) * 255)] if r0 < rho < r1 else 0.0
+
+    # Cloud texture over one period of longitude (half the planet): belts, wavy edges, a storm.
+    tw, th = 320, 160
+    belts = [(c, hw, d + rng.uniform(-0.06, 0.06)) for c, hw, d in
+             ((12, 6, 0.5), (-12, 6, 0.55), (31, 5, 0.42), (-34, 6, 0.45), (50, 5, 0.38), (-53, 5, 0.38),
+              (68, 6, 0.3), (-70, 6, 0.3))]
+    ph = [rng.uniform(0, TAU) for _ in range(3)]
+    su, sl = rng.random(), 21.0  # the north faces us; the rings hide the south
+    tex = bytearray(2 * tw * th)
+    for i in range(th):
+        lat = (i + 0.5) / th * 180 - 90
+        for j in range(tw):
+            u = j / tw  # whole harmonics of u keep the texture periodic
+            lw = lat + 0.7 * math.sin(TAU * 4 * u + 0.2 * lat + ph[0]) + 0.4 * math.sin(TAU * 9 * u - 0.3 * lat + ph[1])
+            v = 0.9
+            for c, hw, d in belts:
+                x = min(1.0, max(0.0, (1 - abs(lw - c) / hw) * 3))
+                v -= d * x * x * (3 - 2 * x) * (1 + 0.15 * math.sin(TAU * 5 * u + 0.5 * lat + ph[2]))
+            v *= 1 - 0.35 * (abs(lat) / 90) ** 3
+            du = (u - su + 0.5) % 1 - 0.5
+            e = (du / 0.078) ** 2 + ((lat - sl) / 5.5) ** 2
+            if e < 1:
+                v = 0.15 + 0.15 * e
+            elif e < 2.5:  # a light collar, wide enough to survive as ASCII
+                v = max(v, 0.95)
+            tex[i * 2 * tw + j] = tex[i * 2 * tw + tw + j] = max(0, min(255, round(255 * v)))
+    tex = bytes(tex)
+    lut = _lut([(0, (75, 30, 20)), (0.4, (160, 95, 55)), (0.7, (215, 170, 115)), (1, (252, 236, 196))])
+
+    # Stars, then one pass over the pixels for everything that never moves.
+    bg = Image.new("RGB", (W, H))
+    draw = ImageDraw.Draw(bg)
+    for _ in range(round(w * h / 1600)):
+        x, y, r, g = rng.uniform(0, W), rng.uniform(0, H), SS * rng.uniform(0.8, 1.6), rng.randint(90, 230)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=(g, g, min(255, g + 20)))
+    bx, by, B = int(cx - R) - 1, int(cy - R) - 1, int(2 * R) + 3  # planet box
+    idx, shade, pmask = [0] * (B * B), bytearray(B * B), bytearray(B * B)
+    zs, zr = [-9.0] * (W * H), [9.0] * (W * H)  # sphere and ring depth (toward us), for the moons
+    ra, rcol = bytearray(W * H), bytearray(3 * W * H)  # visible ring: alpha and color
+    ring_a = bytearray(W * H)  # ring over the background; 255 where it covers the disc
+    for py in range(H):
+        Y = (cy - py - 0.5) / R
+        for px in range(W):
+            X = (px + 0.5 - cx) / R
+            i, d2 = py * W + px, X * X + Y * Y
+            if d2 < 1:
+                z = zs[i] = math.sqrt(1 - d2)
+                lam = X * light[0] + Y * light[1] + z * light[2]
+                k = min(1.0, max(0.0, (lam + 0.1) / 0.35))
+                lit = k * k * (3 - 2 * k) * (0.35 + 0.65 * max(0.0, lam)) * (0.6 + 0.4 * z)
+                t = -(X * pole[0] + Y * pole[1] + z * pole[2]) / nl  # toward the light, to the ring plane
+                if t > 0:
+                    lit *= 1 - 0.6 * dens(math.dist((0, 0, 0), (X + t * light[0], Y + t * light[1], z + t * light[2])))
+                q = (py - by) * B + px - bx
+                shade[q] = round(255 * (0.4 + 0.6 * lit))  # the night side stays visible as ASCII
+                pmask[q] = 255
+                p = _apply(mt, (X, Y, z))
+                row = min(th - 1, int((math.asin(max(-1.0, min(1.0, p[1]))) / math.pi + 0.5) * th))
+                idx[q] = row * 2 * tw + int((math.atan2(p[0], p[2]) / math.pi) % 1 * tw)
+            z = -(X * pole[0] + Y * pole[1]) / pole[2]
+            rho2 = d2 + z * z
+            if r0 * r0 < rho2 < r1 * r1 and not (d2 < 1 and z < zs[i]):
+                a = dens(math.sqrt(rho2))
+                if not a:
+                    continue
+                pl = X * light[0] + Y * light[1] + z * light[2]
+                sh = 1.0 if pl > 0 else min(1.0, max(0.0, (math.sqrt(rho2 - pl * pl) - 0.97) / 0.06))
+                lum = (0.75 + 0.25 * a) * (0.35 + 0.65 * sh)
+                zr[i], ra[i] = z, round(255 * a)
+                rcol[3 * i:3 * i + 3] = bytes(round(c * lum) for c in (232, 214, 180))
+                if d2 < 1:
+                    ring_a[i] = 255
+                    pmask[(py - by) * B + px - bx] = round(255 * (1 - a))
+                else:
+                    ring_a[i] = ra[i]
+    base = Image.composite(Image.frombytes("RGB", (W, H), bytes(rcol)), bg, Image.frombytes("L", (W, H), bytes(ring_a)))
+    shade = Image.frombytes("L", (B, B), bytes(shade)).convert("RGB")
+    pmask = Image.frombytes("L", (B, B), bytes(pmask))
+
+    # Moons: (orbit radius, size, tilt of the orbit from the rings, start, color). One orbit per loop.
+    start = rng.random()
+    moons = [(2.6, 0.13, 8, start, (200, 195, 185)), (2.75, 0.09, -20, start + 0.45, (175, 180, 200))]
+    out = []
+    for f in range(n):
+        t = f / n
+        s = f * tw // n
+        alb = Image.frombytes("L", (B, B), bytes([tex[j + s] for j in idx]))
+        im = base.copy()
+        im.paste(ImageChops.multiply(_colorize(alb, lut), shade), (bx, by), pmask)
+        pix = im.load()
+        for orbit, size, tilt, start, col in moons:
+            a, ti = TAU * (t + start), math.radians(tilt)
+            c = _apply(m, (orbit * math.cos(a), orbit * math.sin(a) * math.sin(ti), orbit * math.sin(a) * math.cos(ti)))
+            cl = sum(p * q for p, q in zip(c, light))
+            eclipse = 1.0 if cl > 0 else min(1.0, max(0.0, (math.sqrt(orbit * orbit - cl * cl) - 1 + size) / (2 * size)))
+            mx, my, mr = cx + c[0] * R, cy - c[1] * R, size * R
+            for py in range(max(0, int(my - mr)), min(H, int(my + mr) + 2)):
+                for px in range(max(0, int(mx - mr)), min(W, int(mx + mr) + 2)):
+                    dx, dy = (px + 0.5 - mx) / mr, (my - py - 0.5) / mr
+                    q = dx * dx + dy * dy
+                    i = py * W + px
+                    if q >= 1 or zs[i] > c[2] + size:
+                        continue
+                    dz = math.sqrt(1 - q)
+                    lam = dx * light[0] + dy * light[1] + dz * light[2]
+                    lum = 0.12 + 0.88 * max(0.0, lam) * eclipse
+                    rgb = [v * lum for v in col]
+                    if ra[i] and zr[i] > c[2] + size * dz:  # ring in front of the moon
+                        k = ra[i] / 255
+                        rgb = [rcol[3 * i + j] * k + rgb[j] * (1 - k) for j in range(3)]
+                    pix[px, py] = tuple(round(v) for v in rgb)
         out.append(_shrink(im, w, h))
     return out
