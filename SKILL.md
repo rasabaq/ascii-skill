@@ -33,7 +33,7 @@ Paths below are relative to this skill's folder.
 | `--invert` | Swap light and dark. |
 | `--contrast 1.0` `--brightness 1.0` | Factors on top of the automatic contrast stretch. `1.0` means no change. |
 | `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. |
-| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). |
+| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). |
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
 | `--font-size 12` | Glyph size in px for PNG/HTML. |
@@ -56,6 +56,35 @@ The script already stretches every image to its full tonal range, so most images
 - `braille` ignores `-c`. Use it with `--dither` for photos and without it for logos. Colors follow the photo, or `--fg`.
 - `halfblock` ignores `-c`, `--dither` and `--fg`, because the colors are the picture. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
 - Terminals draw braille dots small, so braille looks dimmer there than in a PNG.
+- `led` and `dots` draw real round lamps or dots in PNG, GIF, WebP and MP4. Text, terminal and HTML output get the round glyphs `●•·` by size instead. Both ignore `--dither` and `--gap`.
+
+## LED board
+
+`--mode led` draws each cell as one round lamp on a dark board. Lit lamps take the image color (or `--fg`) at a few brightness steps, unlit lamps stay faintly visible, and lit lamps have a soft glow.
+
+```bash
+uv run scripts/ascii.py logo.png --mode led -w 64 -o board.png
+uv run scripts/animate.py --scene planet --mode led -w 64 -o planet.gif
+```
+
+- Defaults: square cells (`--aspect 1`) of 16 px (`--font-size 26`) on black. Text output keeps `--aspect 0.5`.
+- `-c` sets the steps: one lit step per glyph before the last one. The default `●•· ` gives 3 steps; `-c "● "` gives plain on/off lamps.
+- `--fg amber` (or `matrix`, `cyan`, any color) gives a one-color board.
+- Works with `--effect`: `matrix` becomes falling lamps.
+
+## Halftone dots
+
+`--mode dots` is a halftone print: a dot in each cell and one on each cell corner, so the dots sit on a grid turned 45 degrees, as in print. The dot's area matches the ink, so tones stay right when you look from a distance.
+
+```bash
+uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white -o print.png
+uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white --fg black -o newspaper.png
+```
+
+- Defaults: square cells of 12 px (`--font-size 20`) on black. On black, light parts get big dots. On `--bg white`, dark parts do, as on paper.
+- Dot colors come from the image, or all dots are `--fg`.
+- An image with a black background (a scene, a logo) on white paper: add `--invert`. It flips light and dark but keeps the colors, so an orange planet prints as dark orange.
+- Not the same as `-c dots`, which is a braille ramp.
 
 ## Tile poster
 
@@ -92,6 +121,8 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 - Fine dot drawing: `--mode braille --dither --sharpen -o out.png`
 - Print-friendly: `--bg white -o out.png`
 - Tile poster: `--mode tiles -w 36 -o poster.png`
+- LED board: `--mode led -w 64 -o board.png`
+- Newspaper print: `--mode dots -w 90 --bg white --fg black -o print.png`
 
 ### Post effects
 
@@ -200,6 +231,7 @@ from ascii import convert, to_text, to_png
 grid = convert(Image.open("cat.jpg"), width=80, charset="blocks", dither=True)
 # Cells are (char, (r, g, b)). With mode="halfblock" they are (char, top_rgb, bottom_rgb).
 # With mode="tiles", tile cells are (char, ink_rgb, tile_rgb).
+# With mode="led" or "dots", pass the same mode to to_png to draw lamps or dots.
 print(to_text(grid))
 to_png(grid).save("cat_ascii.png")
 

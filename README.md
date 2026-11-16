@@ -2,7 +2,7 @@
 
 A free, open-source agent skill that turns images, GIFs and video into ASCII art and ASCII animation. Inspired by [ASCII Magic](https://www.ascii-magic.com/).
 
-- **Six modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster) and `tiles` (a square-tile poster)
+- **Eight modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster), `tiles` (a square-tile poster), `led` (an LED board with glowing lamps) and `dots` (a halftone print). The last two still give round-glyph text
 - **Moving ASCII:** GIF, WebP, APNG or any video in; GIF, WebP, MP4, an HTML player or terminal playback out. `--subject` keeps only what moves (still camera), and still areas do not flicker
 - **From a description:** `fetch.py "running horse"` finds a freely licensed clip on Wikimedia Commons and prints its attribution
 - **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `city`, `tree`, `planet`, `gears`, all looping
@@ -31,6 +31,8 @@ uv run scripts/ascii.py cat.jpg --mode halfblock --color         # best color ph
 uv run scripts/ascii.py cat.jpg --mode braille --dither -o x.png # fine dot drawing
 uv run scripts/ascii.py cat.jpg --mode tiles -w 32 -o poster.png
 uv run scripts/ascii.py cat.jpg --mode words --accent "#f28c28" -o poster.png
+uv run scripts/ascii.py cat.jpg --mode dots --bg white -o print.png
+uv run scripts/animate.py --scene planet --mode led -w 64 -o board.gif
 
 uv run scripts/animate.py cat.gif -o out.mp4                     # GIF or video to ASCII
 uv run scripts/animate.py cat.jpg --effect matrix -o intro.gif   # animate a still image
@@ -50,6 +52,7 @@ uv run scripts/test_animate.py
 uv run scripts/test_scenes.py
 uv run scripts/test_fetch.py
 uv run scripts/test_post.py
+uv run scripts/test_modes.py
 uv run --with pillow python scripts/test_effects.py
 ```
 

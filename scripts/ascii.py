@@ -11,14 +11,16 @@
 """
 import argparse
 import collections
+import colorsys
 import functools
 import html
 import io
+import math
 import os
 import random
 import sys
 
-from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 import post
 
@@ -39,7 +41,8 @@ FONTS = ["Menlo.ttc", "DejaVuSansMono.ttf", "consola.ttf", "LiberationMono-Regul
 SHADES = {"█": 1.0, "▓": 0.75, "▒": 0.5, "░": 0.25}  # drawn as solid cells in PNG, so no font bleed
 MAX_SIDE = 1000  # ponytail: hard cap on columns and rows; bigger grids eat GBs and nobody can read them
 CELL_W = 0.6  # monospace advance in em
-SUBPIXELS = {"ramp": (1, 1), "shape": (1, 1), "braille": (2, 4), "halfblock": (1, 2), "words": (1, 1), "tiles": (4, 4)}  # image pixels per cell (x, y)
+SUBPIXELS = {"ramp": (1, 1), "shape": (1, 1), "braille": (2, 4), "halfblock": (1, 2), "words": (1, 1), "tiles": (4, 4),
+             "led": (1, 1), "dots": (1, 1)}  # image pixels per cell (x, y)
 # Shape mode samples each cell as a SHAPE_X x SHAPE_Y grid and gives edge cells the glyph whose ink
 # sits in the same places. Symbols only: letters, brackets and ^~<>` read as noise in photos.
 SHAPE_X, SHAPE_Y = 3, 4
@@ -62,6 +65,12 @@ TINT = 0.25  # how much of the photo's hue the words keep
 TILE_GLYPHS = "#?&%/\\<>{}[]()*+=~^$@!:|0123456789ABCDEF"
 TILE_INK = ((42, 44, 46), (223, 227, 224))  # dark ink on light tiles, light ink on dark ones
 TILE_CUT = 40  # how much brighter (on a dark page) than the page a cell must be to become a tile, 0-255
+# LED and dots modes: one round lamp or halftone dot per cell. Text output gets round glyphs by size.
+ROUND = "●•· "
+LED_LAMP = 0.4  # lamp radius as a share of the cell side
+LED_OFF = 0.07  # an unlit lamp sits this far from the board toward white (toward black on a light board)
+LED_GLOW = 0.6  # strength of the soft glow around lit lamps
+DOT_MIN = 0.03  # dots mode: a cell with less ink than this (0-1) gets no dot
 
 
 def rgb(value):
@@ -141,6 +150,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         return _words(small, back, invert, words, seed, accent and rgb(accent), accent_level)
     if mode == "tiles":
         return _tiles(small, width, rows, ramp if charset else None, back, dark_bg, palette, seed)
+    if mode in ("led", "dots"):
+        return _lamps(small, back, ramp if charset else ROUND, mode == "led", invert)
 
     # Ink density per pixel: on a dark background bright pixels get dense glyphs.
     top = 1 if mode == "braille" else len(ramp) - 1
@@ -255,6 +266,129 @@ def _tiles(small, width, rows, ramp, back, dark_bg, palette, seed):
             row.append((ch, TILE_INK[_lum(t) < 140], t) if t else (ch, faint))
         grid.append(row)
     return grid
+
+
+def _ink(c, back):
+    """(amount, ink): a dot of color `ink` covering `amount` (0-1) of a cell on `back` gives the cell the mean
+    color c. The ink is the farthest color from `back` in c's direction, so the tone lives in the area."""
+    a = max((v - b) / (255 - b) if v > b else (b - v) / b if v < b else 0 for v, b in zip(c, back))
+    return a, tuple(round(b + (v - b) / a) for v, b in zip(c, back)) if a else back
+
+
+def _lamps(small, back, ramp, led, invert):
+    """LED and dots cells: (round glyph by ink amount, color). An LED cell's color is its lamp's light, in
+    len(ramp) - 1 steps; a dots cell keeps the true color, so to_png can size its dot exactly.
+    `invert` flips lightness but keeps the hue: an orange planet on black prints as dark orange on white."""
+    top, px, grid = len(ramp) - 1, small.load(), []
+    for y in range(small.height):
+        row = []
+        for x in range(small.width):
+            c = px[x, y]
+            if invert:
+                h, l, s = colorsys.rgb_to_hls(*(v / 255 for v in c))
+                c = tuple(round(v * 255) for v in colorsys.hls_to_rgb(h, 1 - l, s))
+            a, ink = _ink(c, back)
+            k = round(a * top)
+            if led:
+                row.append((ramp[top - k], tuple(round(b + (i - b) * k / top) for i, b in zip(ink, back))))
+            else:  # any visible dot gets at least the smallest glyph
+                row.append((ramp[top - max(k, a >= DOT_MIN)], c))
+        grid.append(row)
+    return grid
+
+
+@functools.lru_cache(maxsize=8)
+def _screen(cw, chh, diagonal):
+    """One cell of the dot screen: (k, dist, slot, radius). `dist` is each pixel's distance to the nearest dot
+    centre in 1/k px, as bytes; `slot` says which dot that is (0 the cell's centre; 1-4 its top-left, top-right,
+    bottom-left, bottom-right corner, on the 45° grid). `radius[q]` is the dot radius (+0.5 px, in 1/k px)
+    whose drawn coverage is q/255 of the cell, found from the exact coverage the renderer gives: tone is right."""
+    pts = [(cw / 2, chh / 2)] + ([(0, 0), (cw, 0), (0, chh), (cw, chh)] if diagonal else [])
+    near = [min((math.hypot(x + 0.5 - u, y + 0.5 - v), i) for i, (u, v) in enumerate(pts))
+            for y in range(chh) for x in range(cw)]
+    k = 255 / (max(d for d, _ in near) + 1)
+    dist = [round(d * k) for d, _ in near]
+    hist = collections.Counter(dist)
+    cover = [sum(m * min(1, max(0, (r - d) / k)) for d, m in hist.items()) / len(dist) for r in range(256)]
+    radius = [min(range(256), key=lambda r: abs(cover[r] - q / 255)) for q in range(256)]
+    return k, dist, [i for _, i in near], radius
+
+
+def _tile(data, cw, chh, cols, rows):
+    """Repeat one cell's pixels over a cols x rows grid."""
+    cell = Image.new("L", (cw, chh))
+    cell.putdata(data)
+    row = Image.new("L", (cw * cols, chh))
+    for x in range(cols):
+        row.paste(cell, (x * cw, 0))
+    out = Image.new("L", (cw * cols, chh * rows))
+    for y in range(rows):
+        out.paste(row, (0, y * chh))
+    return out
+
+
+def _lamp_png(grid, bg, fg, cw, chh, led):
+    """LED lamps or halftone dots. Anti-aliasing comes from a distance field: each pixel is covered by
+    (dot radius - distance to the dot centre + 0.5), clipped to 0-1, so edges are smooth with no supersampling.
+    Lit LED lamps get a glow: one blurred copy of their light over the board."""
+    back = (0, 0, 0) if bg == "none" else rgb(bg)
+    cols, rows = len(grid[0]), len(grid)
+    W, H = cols * cw, rows * chh
+    diagonal = not led  # dots sit on a grid turned 45 degrees, as in print; it hides the grid better
+    k, dist, slot, radius = _screen(cw, chh, diagonal)
+    ink_lum = fg and _lum(fg) - _lum(back)
+
+    def look(ch, c):  # the cell's color seen from afar
+        if ch == " ":
+            return back
+        if not fg:
+            return c
+        a = _ink(c, back)[0] if led else min(1, max(0, (_lum(c) - _lum(back)) / (ink_lum or 1)))
+        return tuple(round(b + (f - b) * a) for f, b in zip(fg, back))
+
+    cells = [[look(c[0], c[1]) for c in row] for row in grid]
+    coverage = _tile(dist, cw, chh, cols, rows)
+    if led:  # every lamp has one size: the coverage is one lamp, repeated; unlit lamps are faint
+        off = tuple(round(b + ((255 if sum(back) < 384 else 0) - b) * LED_OFF) for b in back)
+        lamp = round((LED_LAMP * min(cw, chh) + 0.5) * k)
+        coverage = coverage.point(lambda d: min(255, max(0, round((lamp - d) * 255 / k))))
+        light = Image.new("RGB", (cols, rows))
+        light.putdata([tuple(max(0, v - b) for v, b in zip(c, back)) for row in cells for c in row])
+        lamps = Image.new("RGB", (cols, rows))
+        lamps.putdata([tuple(min(255, max(0, o + v - b)) for o, v, b in zip(off, c, back)) for row in cells for c in row])
+        lamps = lamps.resize((W, H), Image.Resampling.NEAREST)
+        if bg == "none":
+            lamps.putalpha(coverage)
+            return lamps
+        glow = Image.composite(light.resize((W, H), Image.Resampling.NEAREST), Image.new("RGB", (W, H)), coverage)
+        glow = glow.filter(ImageFilter.GaussianBlur(cw * 0.5)).point(lambda v: round(v * LED_GLOW))
+        # Screen, not add: the glow lights the board and dim lamps but cannot push a lit lamp to white.
+        return ImageChops.screen(Image.composite(lamps, Image.new("RGB", (W, H), back), coverage), glow)
+    points = [(cells, 0, 0)]
+    if diagonal:  # a dot on each cell corner, with the mean color of the 4 cells around it
+        def at(x, y):
+            return cells[min(rows - 1, max(0, y))][min(cols - 1, max(0, x))]
+        corners = [[tuple(sum(v) / 4 for v in zip(at(x - 1, y - 1), at(x, y - 1), at(x - 1, y), at(x, y)))
+                    for x in range(cols + 1)] for y in range(rows + 1)]
+        points += [(corners, 0, 0), (corners, 1, 0), (corners, 0, 1), (corners, 1, 1)]
+    ink = rad = None
+    for s, (pts, dx, dy) in enumerate(points):
+        amounts = [[_ink(c, back) for c in row[dx:dx + cols]] for row in pts[dy:dy + rows]]
+        a_img, i_img = Image.new("L", (cols, rows)), Image.new("RGB", (cols, rows))
+        a_img.putdata([radius[round(a * 255)] for row in amounts for a, _ in row])
+        i_img.putdata([tuple(round(v) for v in i) for row in amounts for _, i in row])
+        a_img, i_img = (im.resize((W, H), Image.Resampling.NEAREST) for im in (a_img, i_img))
+        if s == 0:
+            rad, ink = a_img, i_img
+        else:
+            mask = _tile([255 * (v == s) for v in slot], cw, chh, cols, rows)
+            rad.paste(a_img, mask=mask)
+            ink.paste(i_img, mask=mask)
+    coverage = ImageChops.subtract(rad, coverage, scale=k / 255)
+    if bg == "none":
+        ink.putalpha(coverage)
+        return ink
+    return Image.composite(ink, Image.new("RGB", (W, H), back), coverage)
 
 
 @functools.lru_cache(maxsize=8)
@@ -411,12 +545,15 @@ def _braille(ch):
     return "\u2800" <= ch <= "\u28ff"
 
 
-def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
+def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, mode="ramp"):
     """`gap` (px) leaves a border of background around each background cell, for a tile look.
-    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows."""
+    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows.
+    mode "led" or "dots" draws each cell as a lamp or a halftone dot instead of its glyph."""
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     cw = max(1, round(font_size * CELL_W))
     chh = max(1, round(cw / aspect))  # cell shape matches the aspect used to sample the image
+    if mode in ("led", "dots"):
+        return _lamp_png(grid, bg, fg, cw, chh, mode == "led")
     dot = max(1, round(min(cw / 2, chh / 4)))  # braille dot size in px
     glyphs = {c[0] for row in grid for c in row if c[0] not in SHADES and c[0] != HALF and not _braille(c[0])}
     f = font(min(font_size, round(chh / 1.2)), "".join(glyphs))  # glyphs shrink to fit short cells (square tiles)
@@ -459,10 +596,12 @@ def add_poster_args(p):
 
 def poster_defaults(a, image):
     """Fill options left unset. Tiles: square cells, big glyphs, a thin gap. Words and tiles: a charcoal page.
-    Words: the gap only parts stacked rows, so a word's box stays whole. Text stays at aspect 0.5,
-    because a terminal char is twice as tall as it is wide."""
+    Words: the gap only parts stacked rows, so a word's box stays whole. LED and dots: square cells, 16 and
+    12 px. Text stays at aspect 0.5, because a terminal char is twice as tall as it is wide."""
     tiles = a.mode == "tiles"
-    defaults = {"aspect": 1.0 if tiles and image else 0.5, "font_size": 80 if tiles else 12,
+    square = a.mode in ("tiles", "led", "dots")
+    defaults = {"aspect": 1.0 if square and image else 0.5,
+                "font_size": {"tiles": 80, "led": 26, "dots": 20}.get(a.mode, 12),
                 "bg": POSTER_BG if a.mode in ("words", "tiles") else "black"}
     for k, v in defaults.items():
         if getattr(a, k) is None:
@@ -481,7 +620,7 @@ def main(argv=None):
     p.add_argument("-c", "--charset",
                    help="%s, or your own ramp from dense to empty (default standard; tiles: random glyphs)"
                    % ", ".join(CHARSETS))
-    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles: 1 for PNG/HTML)")
+    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles, led, dots: 1 for PNG/HTML)")
     p.add_argument("--contrast", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--brightness", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--invert", action="store_true", help="swap light and dark")
@@ -489,11 +628,11 @@ def main(argv=None):
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (PNG/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color. Default: colors from the photo" % ", ".join(COLORS))
     p.add_argument("--color", action="store_true", help="truecolor ANSI escape codes in text output")
-    p.add_argument("--font-size", type=int, help="PNG/HTML font size in px (default 12; tiles: 80)")
+    p.add_argument("--font-size", type=int, help="PNG/HTML font size in px (default 12; tiles: 80; led: 26; dots: 20)")
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp",
                    help="ramp (default): one glyph per pixel; shape: edges drawn with matching symbols; braille: 2x4 dots per char; "
                         "halfblock: 2 colors per char; words: a poster of words lit by the image; "
-                        "tiles: square color tiles with one glyph each")
+                        "tiles: square color tiles with one glyph each; led: an LED board; dots: a halftone print")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--gap", type=int, help="PNG/HTML: px of background around each background cell (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
@@ -515,7 +654,7 @@ def main(argv=None):
                        words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level, palette=a.palette)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
-            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap)
+            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.mode)
             img = post.apply(img, a.post, img.height // len(grid))
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
