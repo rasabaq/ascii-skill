@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
                    POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
 import effects  # noqa: E402
+import post  # noqa: E402
 import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
@@ -274,6 +275,21 @@ def snap(images, durs, unit, least):
     return keep, [(b - a) * unit for a, b in zip(starts, starts[1:])]
 
 
+def one_palette(images, budget=4_000_000):
+    """GIF: map every frame to one shared 256-color palette, with no dither. A pixel that does not change
+    keeps its palette entry, so still areas never flicker (Pillow would pick a new palette per frame).
+    The palette comes from a sheet of up to 16 frames, scaled with nearest so it only holds real colors."""
+    pick = images[::max(1, len(images) // 16)]
+    w, h = pick[0].size
+    k = min(1, (budget / (w * h * len(pick))) ** 0.5)
+    sw, sh = max(1, round(w * k)), max(1, round(h * k))
+    sheet = Image.new("RGB", (sw, sh * len(pick)))
+    for i, im in enumerate(pick):
+        sheet.paste(im.convert("RGB").resize((sw, sh), Image.Resampling.NEAREST), (0, i * sh))
+    pal = sheet.quantize(256)
+    return [im.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE) for im in images]
+
+
 def to_mp4(images, durs, path, fps):
     """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid."""
     ffmpeg = shutil.which("ffmpeg")
@@ -353,6 +369,8 @@ def main(argv=None):
     p.add_argument("--steady", type=float, default=6, help="keep a pixel until it changes by more than this (0-255), "
                    "so video noise does not make still areas flicker (default 6; 0 = off; grainy film: 16)")
     add_poster_args(p)
+    p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
+                   help="GIF/WebP/MP4: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
     a = p.parse_args(argv)
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
@@ -361,6 +379,8 @@ def main(argv=None):
     poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
+    if a.post and ext not in (".gif", ".webp", ".mp4"):
+        p.error("--post needs a .gif, .webp or .mp4 output")
     if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) \
             or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE):
         p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, -w 1-%d" % MAX_SIDE)
@@ -444,12 +464,13 @@ def main(argv=None):
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap) for g in grids]
+            out = [post.apply(to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap), a.post,
+                              max(1, round(cw / a.aspect))) for g in grids]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps)
             else:
                 # GIF ticks are 10 ms and browsers slow frames under 20 ms, so 60 fps becomes ~40 fps.
-                out, durs = snap(out, durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
+                out, durs = snap(one_palette(out), durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
                 out[0].save(a.output, save_all=True, append_images=out[1:], duration=durs, loop=0,
                             **({"lossless": True} if ext == ".webp" else {}))
         elif ext:

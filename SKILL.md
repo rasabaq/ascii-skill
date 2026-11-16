@@ -93,6 +93,21 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 - Print-friendly: `--bg white -o out.png`
 - Tile poster: `--mode tiles -w 36 -o poster.png`
 
+### Post effects
+
+`--post LIST` adds screen effects to PNG, JPG and WebP from `ascii.py`, and to GIF, WebP and MP4 from `animate.py`. LIST is comma separated:
+
+- `crt`: a curved screen with rounded dark corners, plus scan lines, a soft vignette and a light glow. The full retro monitor.
+- `scan`: thin dark lines between scan lines. They line up with the text rows, so they never beat against the glyphs.
+- `bloom`: bright glyphs glow. The glyphs stay sharp.
+- `chroma`: red and blue fringes that grow toward the edges. The centre stays clean.
+- `vignette`: darker corners.
+- `grain`: fine film grain, strongest in mid tones. Pure black stays black.
+
+The order you type does not matter. Every effect is the same in each frame, so still areas never flicker; the grain does not move. Transparency becomes black. Effects show best on bright art and colour photos (`--mode halfblock`); on a black page, scan lines and vignette only show on the glyphs.
+
+Preset: `--mode halfblock -w 120 --post crt -o tv.png`
+
 ## Animation
 
 `scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.

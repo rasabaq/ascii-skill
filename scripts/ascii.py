@@ -20,6 +20,8 @@ import sys
 
 from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
+import post
+
 # Ramps go from densest to emptiest glyph.
 CHARSETS = {
     "standard": "@%#*+=-:. ",
@@ -496,11 +498,15 @@ def main(argv=None):
     p.add_argument("--gap", type=int, help="PNG/HTML: px of background around each background cell (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
     add_poster_args(p)
+    p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
+                   help="PNG/JPG/WebP: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
     a = p.parse_args(argv)
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, ext not in ("", ".txt"))
     if ext not in ("", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp"):
         p.error("unknown output extension %r: use .txt, .html, .png, .jpg or .webp" % ext)
+    if a.post and ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        p.error("--post needs a .png, .jpg or .webp output")
     if a.font_size < 1:
         p.error("--font-size must be at least 1")
     try:
@@ -510,6 +516,7 @@ def main(argv=None):
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
             img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap)
+            img = post.apply(img, a.post, img.height // len(grid))
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
             with open(a.output, "w", encoding="utf-8") as out:
