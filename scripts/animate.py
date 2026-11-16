@@ -29,8 +29,8 @@ import effects  # noqa: E402
 import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
-MARK2 = "\ue001"  # MARK2 + 6 hex = two-color (halfblock) cells: top and bottom color.
-MARK3 = "\ue002"  # MARK3 + 6 hex = glyph on its own background: ink and background color.
+MARK2 = "\ue001"  # MARK2 + 12 hex = two-color (halfblock) cells: exact top and bottom color.
+MARK3 = "\ue002"  # MARK3 + 12 hex = glyph on its own background: exact ink and background color.
 HOLD_MS = 1500  # an effect holds the finished art this long before it loops
 MAX_MOVING = 0.4  # --subject gives up when more than this share of the picture's edges changes: the camera moves
 MAX_BYTES = 3_000_000_000  # ponytail: GIF/WebP encoders keep every rendered frame in RAM; refuse past ~3 GB
@@ -193,7 +193,8 @@ def prepare(img, back, px):
 
 def html_frame(grid, fg, boxed=False, tiles=False):
     """One frame as HTML text where MARK + 3 hex digits starts a new color; the player turns marks into spans.
-    Colors are rounded to 12 bits so neighbouring cells merge into one run. `boxed` puts each glyph in its
+    Ink is rounded to 12 bits so neighbouring cells merge into one run; two-color cells keep exact colors,
+    since a smooth sky in halfblock would band in 16 steps. `boxed` puts each glyph in its
     own <b> box (glyphs narrower than the cell); `tiles` gives every glyph-on-background cell its own span."""
     esc = (lambda t: "".join("<b>%s</b>" % html.escape(c) for c in t)) if boxed else html.escape
     lines = []
@@ -202,7 +203,7 @@ def html_frame(grid, fg, boxed=False, tiles=False):
         for cell in row:
             ch = cell[0]
             if len(cell) > 2:  # halfblock: the player paints it as a background, so the text is a space
-                pair = "".join("%x%x%x" % tuple((v + 8) // 17 for v in c) for c in cell[1:3])
+                pair = "".join("%02x%02x%02x" % tuple(c) for c in cell[1:3])
                 ch, col = (" ", MARK2 + pair) if ch == HALF else (ch, MARK3 + pair)
             else:
                 col = None if fg else MARK + "%x%x%x" % tuple((v + 8) // 17 for v in cell[1])
@@ -234,9 +235,9 @@ def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0):
             else "i.t{box-shadow:inset 0 %dpx %s,inset 0 -%dpx %s}" % (gy, shadow, gy, shadow) if gy else "")
     box = ("%.3f" % (cw / size), "text-align:center;") if boxed else (CELL_W, "")
     return """<!doctype html><meta charset="utf-8"><title>ASCII animation</title>
-<style>body{margin:0;background:%s;color:%s}i{font-style:normal}%s
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:%s;color:%s}i{font-style:normal}%s
 i.h{display:inline-block;vertical-align:top;height:%.3fem}b{display:inline-block;width:%sem;%sfont-weight:normal}
-pre{margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer}
+pre{margin:0;padding:16px;width:%.1fpx;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer}
 button{position:fixed;right:12px;bottom:12px;font:13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;
 border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}</style>
 <pre id="a" title="Click or press space to play or pause"></pre><button id="b">Pause</button>
@@ -245,8 +246,8 @@ const [F, I, D] = %s, a = document.getElementById("a"), b = document.getElementB
 let i = 0, t = null, due = 0;
 function step() {
   a.innerHTML = F[I[i]].replace(/\\n/g, "</i>\\n").replace(/[\u2800-\u28ff]/g, "<b>$&</b>").replace(/\ue000(...)/g, '</i><i style="color:#$1">')
-    .replace(/\ue001(...)(...)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
-    .replace(/\ue002(...)(...)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
+    .replace(/\ue001(......)(......)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
+    .replace(/\ue002(......)(......)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
   due += D[i]; i = (i + 1) %% I.length;
   t = setTimeout(step, Math.max(0, due - performance.now()));
 }
@@ -258,7 +259,7 @@ a.onclick = b.onclick = toggle;
 onkeydown = e => { if (e.key === " ") { e.preventDefault(); toggle(); } };
 due = performance.now(); step();
 </script>
-""" % ((back, ink, edge, cw / aspect / size) + box + (size, cw / aspect / size, data))
+""" % ((back, ink, edge, cw / aspect / size) + box + (cw * len(grids[0][0]), size, cw / aspect / size, data))
 
 
 def snap(images, durs, unit, least):

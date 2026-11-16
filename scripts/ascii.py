@@ -389,8 +389,9 @@ def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
     return ('<!doctype html><meta charset="utf-8"><title>ASCII art</title>\n'
             '<style>pre span{display:inline-block;vertical-align:top;height:%.3fem}'
             'pre i{display:inline-block;width:%sem;%sfont-style:normal}</style>\n'
-            '<body style="margin:0;background:%s"><pre style="margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,'
-            '\'DejaVu Sans Mono\',monospace">%s</pre></body>\n') % ((lh,) + box + (back, size, lh, "\n".join(lines)))
+            '<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:%s">'
+            '<pre style="margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,\'DejaVu Sans Mono\',monospace">%s</pre></body>\n'
+            ) % ((lh,) + box + (back, size, lh, "\n".join(lines)))
 
 
 def _render(f, ch):
