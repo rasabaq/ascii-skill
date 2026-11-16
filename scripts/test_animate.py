@@ -4,14 +4,19 @@
 """Run: uv run scripts/test_animate.py"""
 import json
 import os
+import random
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
+from argparse import Namespace
 
 from PIL import Image, ImageDraw, ImageSequence
 
 sys.path.insert(0, os.path.dirname(__file__))
-from animate import MARK2, html_frame, main, shared_lut, snap, timeline, to_html_player  # noqa: E402
+from animate import (MARK2, background, html_frame, main, shared_lut, snap, steady, subject_masks,  # noqa: E402
+                     timeline, to_html_player, video_frames)
 from ascii import convert  # noqa: E402
 
 # A 3-frame GIF: a white box moving over a dim gradient, with uneven delays.
@@ -71,4 +76,54 @@ Image.new("RGB", (40, 30), (200, 120, 40)).save(still)
 main([still, "--effect", "decode", "--mode", "halfblock", "-w", "10", "-o", os.path.join(tmp, "fx.gif")])
 fx = Image.open(os.path.join(tmp, "fx.gif"))
 assert fx.n_frames > 10 and fx.info.get("loop") == 0
+
+
+def player_rows(args, path):
+    """Run main to an HTML player; return each shown frame as text rows without color marks."""
+    main(args + ["-o", path])
+    F, I, D = json.loads(re.search(r"const \[F, I, D\] = (.*), a =", open(path, encoding="utf-8").read()).group(1))
+    return [re.sub("\ue000...", "", F[i]).split("\n") for i in I]
+
+
+# Noisy still camera: grey wall with grain, and a white square that moves 6 px per frame.
+rng = random.Random(1)
+clip = []
+for k in range(12):
+    im = Image.new("L", (80, 40))
+    im.putdata([100 + rng.randint(-4, 4) for _ in range(80 * 40)])
+    im = im.convert("RGB")
+    ImageDraw.Draw(im).rectangle((4 + 6 * k, 12, 15 + 6 * k, 27), fill="white")
+    clip.append(im)
+held = steady(clip, 6)
+wall = (0, 33, 79, 39)  # never touched by the square
+assert all(h.crop(wall).tobytes() == held[0].crop(wall).tobytes() for h in held), "grain no longer flickers"
+assert all(h.getpixel((9 + 6 * k, 20)) == (255, 255, 255) for k, h in enumerate(held)), "the square is followed"
+assert held[5].getpixel((9, 20))[0] < 110, "and leaves no trail"
+blue = steady([Image.new("RGB", (4, 4)), Image.new("RGB", (4, 4), (0, 0, 60))], 6)
+assert blue[1].getpixel((1, 1)) == (0, 0, 60), "a change in blue alone counts"
+
+# --subject: the median background has no square, so the mask keeps the square and blanks the grainy wall.
+masks = subject_masks(clip, background(clip, 30), 30)
+assert masks[3].getpixel((27, 20)) == 255 and masks[3].crop(wall).getextrema()[1] < 16
+noisy = os.path.join(tmp, "noisy.gif")
+clip[0].save(noisy, save_all=True, append_images=clip[1:], duration=100, loop=0)
+rows = player_rows([noisy, "--subject", "--mode", "braille", "-w", "40"], os.path.join(tmp, "subj.html"))
+assert all(not "".join(r[-2:]).strip() for r in rows), "the wall is blank"
+assert all("".join(r).strip() for r in rows), "the square is drawn"
+
+# Braille: one dot threshold for the clip, so a big bright box blinking on the left leaves the right side's dots alone.
+blinky = os.path.join(tmp, "blink.gif")
+on = frames[0].copy()
+ImageDraw.Draw(on).rectangle((0, 0, 39, 39), fill="white")
+frames[0].save(blinky, save_all=True, append_images=[on, frames[0], on], duration=100, loop=0)
+rows = player_rows([blinky, "--mode", "braille", "-w", "20"], os.path.join(tmp, "blink.html"))
+assert len({tuple(line.ljust(20)[12:] for line in r) for r in rows}) == 1, rows
+
+# Video: non-square pixels are shown at their display shape.
+if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+    vid = os.path.join(tmp, "anamorphic.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=360x270:rate=10:duration=0.3",
+                    "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", vid], check=True)
+    img, _ = next(video_frames(vid, Namespace(fps=None, start=0, duration=None), 480, 5))
+    assert abs(img.width / img.height - 16 / 9) < 0.02, img.size
 print("ok")

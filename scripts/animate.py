@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-from PIL import Image, ImageSequence
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequence, ImageStat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
@@ -32,6 +32,7 @@ MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3
 MARK2 = "\ue001"  # MARK2 + 6 hex = two-color (halfblock) cells: top and bottom color.
 MARK3 = "\ue002"  # MARK3 + 6 hex = glyph on its own background: ink and background color.
 HOLD_MS = 1500  # an effect holds the finished art this long before it loops
+MAX_MOVING = 0.4  # --subject gives up when more than this share of the picture's edges changes: the camera moves
 MAX_BYTES = 3_000_000_000  # ponytail: GIF/WebP encoders keep every rendered frame in RAM; refuse past ~3 GB
 
 
@@ -54,7 +55,10 @@ def video_frames(path, a, px, cap):
     if probe.returncode or not num:
         raise ValueError("cannot read %s: not an image or video" % path)
     rate = a.fps or (float(num) / float(den or 1) if num != "0" else 25)
-    vf = ("fps=%g," % a.fps if a.fps else "") + "scale='min(iw,%d)':-1:flags=area" % px
+    # Deinterlace only frames flagged as interlaced (old TV and DV footage), and scale by the display shape:
+    # some video stores non-square pixels (sample aspect ratio), which would squash the art.
+    vf = "yadif=deint=interlaced," + ("fps=%g," % a.fps if a.fps else "") + \
+        "scale='min(iw*sar,%d)':'ow/dar':flags=area,setsar=1" % px
     cmd = [ffmpeg, "-v", "error", "-ss", str(a.start), "-i", path] + (["-t", str(a.duration)] if a.duration else [])
     cmd += ["-vf", vf, "-frames:v", str(cap + 1), "-f", "image2pipe", "-c:v", "ppm", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -114,6 +118,66 @@ def shared_lut(images, cutoff=1):
         scale = 255 / (hi - lo) if hi > lo else 1
         lut += [min(255, max(0, int((v - lo) * scale))) if hi > lo else v for v in range(256)]
     return lut
+
+
+def background(images, cut, n=25):
+    """What a still camera sees behind the subject: the per-pixel median of up to `n` frames spread over the clip.
+    A second pass hides what the first one found as subject behind black and white in turn, which cancel out in
+    the median, so a figure that stays in the same spot in most frames does not end up in the background."""
+    s = images[::-(-len(images) // n)]
+    return median([Image.composite(Image.new("RGB", im.size, (255 * (i % 2),) * 3), im, m.point(lambda v: 255 * (v > 127)))
+                   for i, (im, m) in enumerate(zip(s, subject_masks(s, median(s), cut)))])
+
+
+def median(s):
+    """Per-pixel median: an odd-even transposition sort of lighter/darker, so all the work is in Pillow's C code."""
+    s = list(s)
+    for r in range(len(s)):
+        for i in range(r % 2, len(s) - 1, 2):
+            s[i], s[i + 1] = ImageChops.darker(s[i], s[i + 1]), ImageChops.lighter(s[i], s[i + 1])
+    return s[len(s) // 2]
+
+
+def subject_masks(images, bg, cut):
+    """One L mask per frame: 255 where the frame differs from `bg` by more than `cut` (0-255), with a soft edge.
+    Lone noisy pixels are dropped, the mask grows a little, and holes it encloses are filled, so the figure
+    stays solid even where it covers the same spot in most frames (then the median holds part of it)."""
+    ramp = [min(255, max(0, round((v - cut / 2) * 510 / cut))) for v in range(256)]
+    gray, masks = bg.convert("L"), []
+    for im in images:
+        # Old film and auto exposure make a whole frame lighter or darker: take that shift out first.
+        shift = ImageStat.Stat(ImageChops.subtract(im.convert("L"), gray, 1, 128)).median[0] - 128
+        m = change(im.point(lambda v: v - shift), bg)
+        m = m.reduce(2).point(ramp).filter(ImageFilter.MedianFilter(3)).filter(ImageFilter.MaxFilter(3))  # cell size
+        m = ImageChops.lighter(m, holes(m)).filter(ImageFilter.GaussianBlur(1))
+        masks.append(m.resize(im.size, Image.Resampling.BILINEAR))
+    return masks
+
+
+def holes(mask, side=64):
+    """Parts of `mask` that the mask encloses: flood the outside from the edges at low resolution (floodfill is Python)."""
+    k = min(1, side / max(mask.size))
+    small = mask.resize((max(1, round(mask.width * k)), max(1, round(mask.height * k))), Image.Resampling.BOX)
+    small = ImageOps.expand(small.point(lambda v: 255 if v > 127 else 0), 1, 0)
+    ImageDraw.floodfill(small, (0, 0), 128)
+    inside = small.crop((1, 1, small.width - 1, small.height - 1)).point(lambda v: 255 if v == 0 else 0)
+    return inside.resize(mask.size, Image.Resampling.BILINEAR)
+
+
+def change(a, b):
+    """Per pixel, the biggest change in any channel (luma would hide a change in blue)."""
+    r, g, b = ImageChops.difference(a, b).split()
+    return ImageChops.lighter(ImageChops.lighter(r, g), b)
+
+
+def steady(images, cut):
+    """Keep each pixel until it moves more than `cut` (0-255) from the value shown, so video noise does not
+    make glyphs flicker in still areas. Real motion changes pixels by much more, so it passes at once."""
+    out = images[:1]
+    for im in images[1:]:
+        moved = change(im, out[-1]).filter(ImageFilter.BoxBlur(1))  # blur: grain averages out
+        out.append(Image.composite(im, out[-1], moved.point(lambda v: 255 * (v > cut))))
+    return out
 
 
 def prepare(img, back, px):
@@ -275,17 +339,24 @@ def main(argv=None):
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
-    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock or words")
+    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
     p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
                    % ", ".join(scenes.SCENES))
+    p.add_argument("--subject", action="store_true",
+                   help="still camera: keep only what moves and draw it on a clean page (white if the background is light)")
+    p.add_argument("--subject-cut", type=float, default=40, help="--subject: how much (0-255) a pixel must differ "
+                   "from the still background to count as subject (default 40)")
+    p.add_argument("--steady", type=float, default=6, help="keep a pixel until it changes by more than this (0-255), "
+                   "so video noise does not make still areas flicker (default 6; 0 = off; grainy film: 16)")
     add_poster_args(p)
     a = p.parse_args(argv)
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
+    user_bg = a.bg
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
@@ -320,12 +391,37 @@ def main(argv=None):
             w, h = images[0].size
             width = max(1, min(cols - 1, int((lines - 1) * w / (h * a.aspect))))
         width = width or 100
-        lut = list(range(256)) * 3 if a.scene else shared_lut(images)  # scenes are drawn in their own colors
+        footage = not a.scene  # scenes are drawn clean, in their own colors: no steadying, stretch or cut-out
+        if footage and a.steady and len(images) > 1:
+            images = steady(images, a.steady)
+        lut = shared_lut(images) if footage else list(range(256)) * 3
+        images = [im.point(lut) for im in images]
+        if footage and a.subject and len(images) > 1:
+            still = background(images, a.subject_cut)
+            masks = subject_masks(images, still, a.subject_cut)
+            w, h = still.size  # with a still camera the picture's edges are mostly background
+            dx, dy = max(1, w // 10), max(1, h // 10)
+            ring = Image.new("L", (w, h), 255)
+            ImageDraw.Draw(ring).rectangle((dx, dy, max(dx, w - 1 - dx), max(dy, h - 1 - dy)), fill=0)
+            moving = sum(ImageStat.Stat(m, ring).mean[0] for m in masks) / len(masks) / 255
+            if moving > MAX_MOVING:
+                print("note: --subject skipped: %d%% of the picture's edges change, so the camera seems to move"
+                      % (100 * moving), file=sys.stderr)
+            else:
+                if user_bg is None and a.mode not in ("words", "tiles"):  # a page in the background's own tone
+                    a.bg = bg = "white" if ImageStat.Stat(still.convert("L")).mean[0] > 128 else "black"
+                    back = rgb(bg)
+                fill = Image.new("RGB", still.size, tuple(255 - v for v in back) if a.invert else back)
+                images = [Image.composite(im, fill, m) for im, m in zip(images, masks)]
+        cut = None
+        if a.mode == "braille" and not a.dither and len(images) > 1:  # one dot threshold, so dots hold still
+            lum = min(1, a.brightness * sum(ImageStat.Stat(im.convert("L")).mean[0] for im in images) / len(images) / 255)
+            cut = min(0.75, max(0.25, lum if (sum(back) < 384) != a.invert else 1 - lum))
 
         def look(im, palette):
-            return convert(im.point(lut), width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
+            return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
-                           words=a.words, accent=a.accent, accent_level=a.accent_level)  # same seed: same layout
+                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut)  # same seed: same layout
 
         pal = a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker

@@ -85,7 +85,7 @@ def dither_levels(levels, width, top):
 
 def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1.0,
             invert=False, dither=False, bg="black", mode="ramp", sharpen=False, autocontrast=True,
-            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8):
+            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None):
     """Return rows of (char, (r, g, b)) cells. `aspect` is char width / char height.
 
     mode "shape" maps brightness like "ramp", then gives each cell with an edge the ASCII symbol whose
@@ -97,6 +97,7 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     to `palette` colors (a count, or a list of RGB colors to reuse), and faint (glyph, ink) cells elsewhere.
     Glyphs are random from `seed`, or ramp glyphs when `charset` is given.
     autocontrast=False skips the per-image tonal stretch (animate.py applies one shared stretch).
+    `cut` (0-1) sets the braille dot threshold; animate.py passes one for the whole clip.
     """
     ramp = CHARSETS.get(charset or "standard", charset)
     if len(ramp) < 2:
@@ -143,7 +144,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     top = 1 if mode == "braille" else len(ramp) - 1
     levels = [(v if dark_bg != invert else 255 - v) / 255 * top for v in small.convert("L").tobytes()]
     # Braille dots without dither: threshold at the image's mean, so mid-tone ink (a blue logo) still shows.
-    cut = min(0.75, max(0.25, sum(levels) / len(levels))) if mode == "braille" and not dither else 0.5
+    if cut is None:
+        cut = min(0.75, max(0.25, sum(levels) / len(levels))) if mode == "braille" and not dither else 0.5
     if dither:
         dither_levels(levels, pw, top)
     # Braille color is the average of the cell's 8 pixels.
