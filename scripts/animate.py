@@ -12,6 +12,7 @@
     uv run scripts/animate.py --scene donut -o donut.gif           # a looping animation drawn in code
 """
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -217,36 +218,52 @@ def html_frame(grid, fg, boxed=False, tiles=False):
 
 
 def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0):
-    """`gap` (px) parts the boxes of glyph-on-background cells from each other; (0, y) only parts stacked rows (words mode)."""
+    """A standalone page whose <div> block can also be pasted into any web page: the art fills the width of
+    its container, the CSS and JS touch only that block, and a reader who asks for reduced motion sees the
+    last frame, paused. `gap` (px at --font-size) parts the boxes of glyph-on-background cells from each
+    other; (0, y) only parts stacked rows (words mode)."""
     cw = font_size * CELL_W
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     size = min(font_size, round(cw / aspect / 1.2))  # glyphs shrink to fit short cells, as in ascii.to_html
     boxed = size < font_size
-    uniq, idx = {}, []
-    for g in grids:  # identical frames are stored once
-        idx.append(uniq.setdefault(html_frame(g, fg, boxed, gx > 0), len(uniq)))
-    data = json.dumps([list(uniq), idx, [round(d) for d in durs]], ensure_ascii=False).replace("</", "<\\/")
+    lines, frames, idx = {}, {}, []
+    for g in grids:  # each distinct line and each distinct frame is stored once
+        f = tuple(lines.setdefault(t, len(lines)) for t in html_frame(g, fg, boxed, gx > 0).split("\n"))
+        idx.append(frames.setdefault(f, len(frames)))
+    data = json.dumps([list(lines), list(frames), idx, [round(d) for d in durs]],
+                      ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     back = "transparent" if bg == "none" else "#%02x%02x%02x" % rgb(bg)
     ink = "#%02x%02x%02x" % fg if fg else "inherit"  # without --fg every glyph has its own span color
     shadow = "#000" if bg == "none" else back
-    edge = ("i.t{box-shadow:inset 0 0 0 %dpx %s;border-radius:%dpx}" % (gx, shadow, gx + _corner(round(cw), gx)) if gx
-            else "i.t{box-shadow:inset 0 %dpx %s,inset 0 -%dpx %s}" % (gy, shadow, gy, shadow) if gy else "")
+    e = lambda px: "%.3fem" % (px / size)  # px at --font-size, as em, so gaps scale with the art
+    edge = ("#P i.t{box-shadow:inset 0 0 0 %s %s;border-radius:%s}" % (e(gx), shadow, e(gx + _corner(round(cw), gx))) if gx
+            else "#P i.t{box-shadow:inset 0 %s %s,inset 0 -%s %s}" % (e(gy), shadow, e(gy), shadow) if gy else "")
     box = ("%.3f" % (cw / size), "text-align:center;") if boxed else (CELL_W, "")
-    return """<!doctype html><meta charset="utf-8"><title>ASCII animation</title>
-<style>body{margin:0;background:%s;color:%s}i{font-style:normal}%s
-i.h{display:inline-block;vertical-align:top;height:%.3fem}b{display:inline-block;width:%sem;%sfont-weight:normal}
-pre{margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer}
-button{position:fixed;right:12px;bottom:12px;font:13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;
-border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}</style>
-<pre id="a" title="Click or press space to play or pause"></pre><button id="b">Pause</button>
-<script>
-const [F, I, D] = %s, a = document.getElementById("a"), b = document.getElementById("b");
+    row_em = len(grids[0][0]) * cw / size  # one row is this many em wide
+    uid = "ascii-" + hashlib.md5(data.encode()).hexdigest()[:8]  # every rule is scoped to this block
+    # all:revert drops the host page's pre/b/i/button styles; the rules after it win by order or specificity.
+    css = ("""#P,#P *{all:revert}#P{position:relative;overflow:hidden;container-type:inline-size;background:%s;color:%s}#P i{font-style:normal}%s
+#P i.h{display:inline-block;vertical-align:top;height:%.3fem}#P b{display:inline-block;width:%sem;%sfont-weight:normal}
+#P pre{margin:0;font:calc(100cqw / %.3f)/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer}
+#P button{position:absolute;right:8px;bottom:8px;font:12px system-ui,sans-serif;padding:4px 10px;border-radius:6px;
+border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}"""
+           % ((back, ink, edge, cw / aspect / size) + box + (row_em, cw / aspect / size))).replace("#P", "#" + uid)
+    return """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASCII animation</title><style>body{margin:0;background:%s}</style>
+<!-- To put the animation on your own page, paste everything from here to the end. It fills the width of its parent. -->
+<div id="%s"><style>%s</style>
+<pre role="img" aria-label="ASCII animation" title="Click to play or pause"></pre><button type="button">Pause</button>
+<script>{
+const [L, F, I, D] = %s, box = document.currentScript.parentNode, a = box.querySelector("pre"), b = box.querySelector("button");
 let i = 0, t = null, due = 0;
+function show(k) {
+  a.innerHTML = F[I[k]].map(n => L[n]).join("\\n").replace(/\\n/g, "</i>\\n").replace(/[\\u2800-\\u28ff]/g, "<b>$&</b>")
+    .replace(/\\ue000(...)/g, '</i><i style="color:#$1">')
+    .replace(/\\ue001(...)(...)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
+    .replace(/\\ue002(...)(...)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
+}
 function step() {
-  a.innerHTML = F[I[i]].replace(/\\n/g, "</i>\\n").replace(/[\u2800-\u28ff]/g, "<b>$&</b>").replace(/\ue000(...)/g, '</i><i style="color:#$1">')
-    .replace(/\ue001(...)(...)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
-    .replace(/\ue002(...)(...)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
-  due += D[i]; i = (i + 1) %% I.length;
+  show(i); due += D[i]; i = (i + 1) %% I.length;
   t = setTimeout(step, Math.max(0, due - performance.now()));
 }
 function toggle() {
@@ -254,10 +271,10 @@ function toggle() {
   else { b.textContent = "Pause"; due = performance.now(); step(); }
 }
 a.onclick = b.onclick = toggle;
-onkeydown = e => { if (e.key === " ") { e.preventDefault(); toggle(); } };
-due = performance.now(); step();
-</script>
-""" % ((back, ink, edge, cw / aspect / size) + box + (size, cw / aspect / size, data))
+if (matchMedia("(prefers-reduced-motion: reduce)").matches) { show(I.length - 1); b.textContent = "Play"; }
+else { due = performance.now(); step(); }
+}</script></div>
+""" % (back, uid, css, data)
 
 
 def snap(images, durs, unit, least):

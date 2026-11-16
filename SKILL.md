@@ -172,6 +172,23 @@ Search with short plain English words for the subject and the motion. Line drawi
 
 If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (see "Scenes").
 
+### Put it on a web page
+
+There are two ways:
+
+- **HTML player** (`-o art.html`). The art is real text, sharp at any size, and it fills the width of the box you put it in. Open the file, copy everything from the `<!-- To put the animation on your own page ... -->` line to the end, and paste it into your page. Its CSS and JS only touch that block, so your page's styles do not break it and it does not break your page. The Pause button sits in the art's corner, and readers who ask for less motion see the finished art, paused. Best for text-style art (braille, ramp, tiles). A 200-column, 50-frame loop is about 150 KB, or about 20 KB when the server gzips it.
+- **MP4 in a `<video>` tag** (`-o art.mp4`). Best for halfblock art, long clips, or a full-width hero. A video does not pause by itself for readers who ask for less motion, so add `controls` or a pause button.
+
+```html
+<!-- HTML player: set the size on the parent box -->
+<div style="max-width: 720px">
+  ...the block you copied from art.html...
+</div>
+
+<!-- MP4 -->
+<video src="art.mp4" autoplay muted loop playsinline controls style="width: 100%"></video>
+```
+
 ## Python use
 
 ```python

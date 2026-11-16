@@ -34,10 +34,32 @@ out = Image.open(os.path.join(tmp, "out.gif"))
 assert [f.info["duration"] for f in ImageSequence.Iterator(out)] == [100, 200, 300]
 assert out.info["loop"] == 0, "loops forever"
 
+
+
+def shown_frames(page):
+    """The player's data, as the text of each frame it shows, and the frame times."""
+    L, F, I, D = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", page).group(1))
+    return ["\n".join(L[n] for n in F[i]) for i in I], D
+
+
 main([src, "-o", os.path.join(tmp, "out.html"), "-w", "20"])
 page = open(os.path.join(tmp, "out.html"), encoding="utf-8").read()
-F, I, D = json.loads(re.search(r"const \[F, I, D\] = (.*), a =", page).group(1))
-assert len(I) == 3 and D == [100, 200, 300], (I, D)
+shown, D = shown_frames(page)
+assert len(shown) == 3 and D == [100, 200, 300], D
+
+# Embeddable: the art fills its container, nothing is fixed to the page, reduced motion shows a still,
+# and every rule is scoped to the player's own block.
+assert "100cqw" in page and "position:fixed" not in page and "prefers-reduced-motion" in page
+uid = re.search(r'<div id="(ascii-[0-9a-f]{8})">', page).group(1)
+css = re.search(r"<div id[^>]*><style>(.*?)</style>", page, re.S).group(1)
+assert all(rule.strip().startswith("#" + uid) for rule in re.split(r"}", css) if rule.strip()), css
+# A frame that moves in a few rows stores the other rows once.
+rows = [[(c, (200, 200, 200)) for c in "ab"]] * 30
+moved = [rows[:5] + [[("x", (0, 0, 0))] * 2] + rows[6:], rows]
+big = to_html_player(moved, [100, 100], "black", None, 12, 0.5)
+L = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", big).group(1))[0]
+assert len(L) == 2, L
+assert shown_frames(big)[0] == [html_frame(g, None) for g in moved]
 
 # --fps resamples, --start/--duration cut, the cap truncates.
 ten = [(None, 100)] * 10
@@ -81,8 +103,7 @@ assert fx.n_frames > 10 and fx.info.get("loop") == 0
 def player_rows(args, path):
     """Run main to an HTML player; return each shown frame as text rows without color marks."""
     main(args + ["-o", path])
-    F, I, D = json.loads(re.search(r"const \[F, I, D\] = (.*), a =", open(path, encoding="utf-8").read()).group(1))
-    return [re.sub("\ue000...", "", F[i]).split("\n") for i in I]
+    return [re.sub("\ue000...", "", f).split("\n") for f in shown_frames(open(path, encoding="utf-8").read())[0]]
 
 
 # Noisy still camera: grey wall with grain, and a white square that moves 6 px per frame.
