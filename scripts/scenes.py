@@ -13,7 +13,7 @@ import colorsys
 import math
 import random
 
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from ascii import font
 
@@ -461,5 +461,149 @@ def text(w, h, n, seed, word="ASCII"):
             col = tuple(round(v * 255) for v in colorsys.hsv_to_rgb((t + i / len(word)) % 1.0, 0.75, 1.0))
             draw.text((x + cw / 2, y), ch, font=ft, fill=col, anchor="mm", stroke_width=round(size / 20), stroke_fill=col)
             x += cw + gap
+        out.append(_shrink(im, w, h))
+    return out
+
+
+def _turn(v, a):
+    """Vector v turned by angle a (clockwise on screen, where y points down)."""
+    return (v[0] * math.cos(a) - v[1] * math.sin(a), v[0] * math.sin(a) + v[1] * math.cos(a))
+
+
+def _lit(w, h, col):
+    """A metal color over a w x h box, lit from the top left, and its (bright, dark) edge colors."""
+    g = Image.linear_gradient("L")
+    diag = ImageChops.add(g.resize((w, h)), g.rotate(90).resize((w, h)), scale=2)
+    hi, lo = tuple(min(255, round(c * 1.15 + 25)) for c in col), tuple(round(c * 0.7) for c in col)
+    edges = tuple(min(255, round(c * 0.4 + 155)) for c in col), tuple(round(c * 0.22) for c in col)
+    return _colorize(diag, _lut([(0, hi), (0.45, col), (1, lo)])), edges
+
+
+def _metal(im, xy, mask, lit, d):
+    """Paste a metal part through its mask: edges that face the light get a bright rim and edges that
+    face away a dark one, so the part looks raised."""
+    color, (bright, dark) = lit
+    im.paste(color, xy, mask)
+    im.paste(bright, xy, ImageChops.subtract(mask, ImageChops.offset(mask, d, d)))
+    im.paste(dark, xy, ImageChops.subtract(mask, ImageChops.offset(mask, -d, -d)))
+
+
+@scene(320, 240, 80, 25)
+def gears(w, h, n, seed):
+    """Clockwork: six meshing spur gears held by an anchor escapement on a swinging pendulum.
+    All teeth are the same size, so where two gears mesh their rims move equally far: every gear turns
+    by the same number of teeth (4 per loop), which brings it and its spokes back to the first pose,
+    and small gears spin faster. Each gear is set half a tooth off its parent so teeth sit in gaps.
+    The train ticks: it moves while the pendulum swings through the middle, and stands still while a
+    pallet of the anchor dips into a gap of the escape wheel at each end of the swing."""
+    W, H = w * SS, h * SS
+    k = SS * min(w / 320, h / 240)  # the layout is in 320x240 units
+    ox, oy = (W - 320 * k) / 2, (H - 240 * k) / 2
+
+    def at(x, y):
+        return ox + x * k, oy + y * k
+
+    mod, ticks, amp = 6, 4, 0.3  # tooth size, ticks per loop, pendulum swing in radians
+    brass, steel = (240, 186, 82), (155, 166, 186)
+    # teeth, parent, center (first) or angle from the parent in degrees, color, spokes (or -n round holes)
+    spec = [(12, None, (160, 80), steel, 3), (24, 0, 160, brass, 6), (16, 0, 35, brass, 4),
+            (12, 2, -40, steel, -6), (10, 1, 110, steel, -5), (10, 2, 55, steel, -5)]
+    # One tooth and the gap after it, as (fraction of a tooth, radius in modules from the pitch circle).
+    tooth = [(-0.3, -1.25), (-0.21, 0), (-0.12, 0.85), (-0.05, 1), (0.05, 1), (0.12, 0.85), (0.21, 0),
+             (0.3, -1.25), (0.4, -1.25), (0.5, -1.25), (0.6, -1.25)]
+    gs = []
+    for teeth, parent, where, col, spokes in spec:
+        r = mod * teeth / 2
+        if parent is None:  # the escape wheel, with a gap under each pallet while the train stands still
+            c, phase, spin = where, math.radians(-135) - math.pi / teeth, 1
+        else:
+            pc, pr, pteeth, pphase, pspin = gs[parent][:5]
+            phi = math.radians(where)
+            gap = pr + r + 0.15 * mod  # a little play, so the straight-sided teeth never touch
+            c = (pc[0] + gap * math.cos(phi), pc[1] + gap * math.sin(phi))
+            phase = phi + math.pi - math.pi / teeth + (phi - pphase) * pteeth / teeth
+            spin = -pspin
+        size = math.ceil(2 * (r + 2 * mod) * k)
+        gs.append((c, r, teeth, phase, spin, spokes, size, _lit(size, size, col)))
+    pivot, length, bob = (160, 22), 196, 15
+    bc, btip = gs[0][0], gs[0][1] + mod
+    # Pallet tips: they reach the escape wheel's tip circle just as the train stops (0.3 ticks from the end
+    # of the swing) and leave it just as it starts again.
+    q = (bc[0] - (btip + 1) * math.sqrt(0.5) - pivot[0], bc[1] - (btip + 1) * math.sqrt(0.5) - pivot[1])
+    pallets = [_turn(q, amp * math.cos(0.3 * math.pi))]
+    pallets.append((-pallets[0][0], pallets[0][1]))
+    bg = _colorize(Image.linear_gradient("L").resize((W, H)), _lut([(0, (10, 10, 14)), (1, (2, 2, 4))]))
+    shiny, gold = _lit(W, H, (190, 200, 215)), _lit(W, H, brass)
+    lw = max(1, round(2 * k))
+    out = []
+    for i in range(n):
+        kt = ticks * i / n
+        x = min(1.0, max(0.0, (kt % 1 - 0.3) / 0.4))
+        p = math.floor(kt) + x * x * (3 - 2 * x)  # teeth turned so far
+        swing = amp * math.cos(math.pi * kt)
+        im = bg.copy()
+        # The pendulum hangs behind the gears.
+        end = _turn((0, length), swing)
+        bx, by = at(pivot[0] + end[0], pivot[1] + end[1])
+        m = Image.new("L", (W, H))
+        ImageDraw.Draw(m).line([at(*pivot), (bx, by)], fill=255, width=round(5 * k))
+        _metal(im, (0, 0), m, shiny, lw)
+        m = Image.new("L", (W, H))
+        ImageDraw.Draw(m).ellipse((bx - bob * k, by - bob * k, bx + bob * k, by + bob * k), fill=255)
+        _metal(im, (0, 0), m, gold, lw)
+        parts = []
+        for c, r, teeth, phase, spin, spokes, size, lit in gs:
+            ang = phase + spin * p * TAU / teeth
+            o = size / 2
+            m = Image.new("L", (size, size))
+            d = ImageDraw.Draw(m)
+            pts = []
+            for j in range(teeth):
+                for u, dr in tooth:
+                    a, rad = ang + (j + u) * TAU / teeth, (r + dr * mod) * k
+                    pts.append((o + rad * math.cos(a), o + rad * math.sin(a)))
+            d.polygon(pts, fill=255)
+            if spokes > 0:  # a rim and a hub joined by spokes, the rest cut away
+                ri = (r - 2.2 * mod) * k
+                d.ellipse((o - ri, o - ri, o + ri, o + ri), fill=0)
+                for s in range(spokes):
+                    a = ang + s * TAU / spokes
+                    d.line([(o, o), (o + ri * 1.1 * math.cos(a), o + ri * 1.1 * math.sin(a))], fill=255,
+                           width=round(0.12 * r * k))
+            else:
+                hr, hd = 0.13 * r * k, 0.55 * (r - 1.25 * mod) * k
+                for s in range(-spokes):
+                    a = ang + s * TAU / -spokes
+                    hx, hy = o + hd * math.cos(a), o + hd * math.sin(a)
+                    d.ellipse((hx - hr, hy - hr, hx + hr, hy + hr), fill=0)
+            hub = 0.22 * r * k
+            d.ellipse((o - 1.3 * hub, o - 1.3 * hub, o + 1.3 * hub, o + 1.3 * hub), fill=255)
+            cx, cy = at(*c)
+            parts.append(((round(cx - o), round(cy - o)), m, lit, hub))
+        for (x0, y0), m, *_ in parts:  # shadows first, so no gear shades another
+            im.paste((0, 0, 0), (x0 + round(4 * k), y0 + round(4 * k)), m.point(lambda v: v * 0.6))
+        for xy, m, lit, hub in parts:
+            _metal(im, xy, m, lit, lw)
+            o = m.size[0] / 2
+            boss = Image.new("L", m.size)
+            ImageDraw.Draw(boss).ellipse((o - hub, o - hub, o + hub, o + hub), fill=255)
+            _metal(im, xy, boss, lit, lw)
+            a = 0.4 * hub
+            ImageDraw.Draw(im).ellipse((xy[0] + o - a, xy[1] + o - a, xy[0] + o + a, xy[1] + o + a), fill=(16, 16, 20))
+        # The anchor turns with the pendulum, in front of the escape wheel.
+        m = Image.new("L", (W, H))
+        d = ImageDraw.Draw(m)
+        for tip in pallets:
+            away = _unit((pivot[0] + tip[0] - bc[0], pivot[1] + tip[1] - bc[1]))
+            outer = (tip[0] + 10 * away[0], tip[1] + 10 * away[1])
+            # An arch: out from the pivot, then down to the pallet, which points at the wheel.
+            arm = [(0, 0), (0.75 * outer[0], -2), outer, tip]
+            arm = [at(pivot[0] + x, pivot[1] + y) for x, y in (_turn(v, swing) for v in arm)]
+            d.line(arm[:3], fill=255, width=round(6 * k), joint="curve")
+            d.line(arm[2:], fill=255, width=round(7 * k))
+        px, py = at(*pivot)
+        d.ellipse((px - 8 * k, py - 8 * k, px + 8 * k, py + 8 * k), fill=255)
+        _metal(im, (0, 0), m, shiny, lw)
+        ImageDraw.Draw(im).ellipse((px - 3 * k, py - 3 * k, px + 3 * k, py + 3 * k), fill=(16, 16, 20))
         out.append(_shrink(im, w, h))
     return out
