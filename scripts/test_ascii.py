@@ -154,6 +154,11 @@ duo.paste((255, 0, 0), (0, 0, 100, 200))
 words = convert(duo, width=40, mode="words", accent="#ff0000")
 assert sum(ch not in " \n" for ch in to_text(words)) == sum(c[0] != " " for row in words for c in row)
 
+# Glow: light bleeds into the empty cell next to a glyph; HTML gets the same as a text-shadow.
+lone = [[("#", (0, 255, 0)), (" ", (0, 0, 0))]]
+assert to_png(lone, glow=0.8).getpixel((10, 12))[1] > to_png(lone).getpixel((10, 12))[1] == 0
+assert "text-shadow:0 0 6.7px" in to_html(lone, glow=0.8) and "text-shadow" not in to_html(lone)
+
 # A grid too big to render in RAM is refused, not allocated.
 try:
     to_png([[("#", (1, 1, 1))] * 1000] * 1000, font_size=80, aspect=1.0)

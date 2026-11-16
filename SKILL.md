@@ -37,6 +37,7 @@ Paths below are relative to this skill's folder.
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
 | `--font-size 12` | Glyph size in px for PNG/HTML. |
+| `--glow 0.8` | Soft bloom around the glyphs (0-1) in PNG, HTML and animation, like light on an old screen. Best on a dark background. |
 
 ## Fixing weak results
 
@@ -85,17 +86,18 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 
 ## Presets
 
-- Matrix: `-c binary --fg matrix -o out.png`
+- Matrix: `-c binary --fg matrix --glow 0.8 -o out.png`
 - Retro amber terminal: `-c terminal --fg amber -o out.png`
 - Photo mosaic in color: `-c detailed -w 160 -o out.html`
 - Best color photo in a terminal: `--mode halfblock --color`
 - Fine dot drawing: `--mode braille --dither --sharpen -o out.png`
+- Film noir: `--fg "#e8e6df" --contrast 1.35 --bg "#050505" --glow 0.7 -o out.png`
 - Print-friendly: `--bg white -o out.png`
 - Tile poster: `--mode tiles -w 36 -o poster.png`
 
 ## Animation
 
-`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
+`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--glow`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
 
 ```bash
 uv run scripts/animate.py cat.gif                          # play in the terminal, Ctrl-C stops

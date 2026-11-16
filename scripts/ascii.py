@@ -18,7 +18,7 @@ import os
 import random
 import sys
 
-from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 # Ramps go from densest to emptiest glyph, sorted by measured ink (Menlo).
 CHARSETS = {
@@ -348,8 +348,8 @@ def _html_run(style, run, boxed=False):
     return '<span style="%s">%s</span>' % (style, text) if style else text
 
 
-def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
-    """`gap` (px) leaves a border of page background around each background cell, for a tile look.
+def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, glow=0):
+    """`glow` (0-1) adds a soft bloom around the glyphs. `gap` (px) leaves a border of page background around each background cell, for a tile look.
     A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows.
     Glyphs shrink to fit short cells, as in to_png; then each glyph sits centred in its own cell-wide box."""
     back = "transparent" if bg == "none" else "#%02x%02x%02x" % rgb(bg)
@@ -390,8 +390,13 @@ def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
             '<style>pre span{display:inline-block;vertical-align:top;height:%.3fem}'
             'pre i{display:inline-block;width:%sem;%sfont-style:normal}</style>\n'
             '<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:%s">'
-            '<pre style="margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,\'DejaVu Sans Mono\',monospace">%s</pre></body>\n'
-            ) % ((lh,) + box + (back, size, lh, "\n".join(lines)))
+            '<pre style="margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,\'DejaVu Sans Mono\',monospace%s">%s</pre></body>\n'
+            ) % ((lh,) + box + (back, size, lh, _glow_css(glow, font_size), "\n".join(lines)))
+
+
+def _glow_css(glow, font_size):
+    """CSS bloom for to_html and the animate.py player: text-shadow takes each glyph's own color."""
+    return ";text-shadow:0 0 %.1fpx" % (font_size * 0.7 * glow) if glow else ""
 
 
 def _render(f, ch):
@@ -419,8 +424,8 @@ def _braille(ch):
     return "\u2800" <= ch <= "\u28ff"
 
 
-def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
-    """`gap` (px) leaves a border of background around each background cell, for a tile look.
+def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, glow=0):
+    """`glow` (0-1) adds a soft bloom around bright glyphs (not with bg "none"). `gap` (px) leaves a border of background around each background cell, for a tile look.
     A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows."""
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     cw = max(1, round(font_size * CELL_W))
@@ -456,6 +461,8 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
                     draw.ellipse((cx, cy, cx + dot - 1, cy + dot - 1), fill=ink)
             elif ch != " ":
                 draw.text((x * cw + cw / 2, y * chh + chh / 2), ch, font=f, fill=ink, anchor="mm")
+    if glow and mode == "RGB":  # bloom: a blurred copy screened over the art, like light bleeding on a CRT
+        img = ImageChops.screen(img, img.filter(ImageFilter.GaussianBlur(font_size * 0.7)).point(lambda v: round(v * glow)))
     return img
 
 
@@ -508,25 +515,26 @@ def main(argv=None):
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--gap", type=int, help="PNG/HTML: px of background around each background cell (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
+    p.add_argument("--glow", type=float, default=0, help="PNG/HTML: soft bloom around the glyphs, 0-1 (try 0.8)")
     add_poster_args(p)
     a = p.parse_args(argv)
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, ext not in ("", ".txt"))
     if ext not in ("", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp"):
         p.error("unknown output extension %r: use .txt, .html, .png, .jpg or .webp" % ext)
-    if a.font_size < 1:
-        p.error("--font-size must be at least 1")
+    if a.font_size < 1 or not 0 <= a.glow <= 1:
+        p.error("need --font-size >= 1 and --glow 0-1")
     try:
         grid = convert(load(a.image), a.width, a.charset, a.aspect, a.contrast, a.brightness,
                        a.invert, a.dither, "black" if a.bg == "none" else a.bg, a.mode, a.sharpen,
                        words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level, palette=a.palette)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
-            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap)
+            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow)
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
             with open(a.output, "w", encoding="utf-8") as out:
-                out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap))
+                out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow))
         else:
             text = to_ansi(grid, fg) if a.color else to_text(grid, a.mode == "tiles")
             if a.output:
