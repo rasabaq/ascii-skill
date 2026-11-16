@@ -170,7 +170,7 @@ assert Image.open(tmp + ".gb.png").getpixel((0, 0)) == RETRO["gameboy"][0], "the
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
 assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
 for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"],
-             ["--colors", "nope"], ["--dither", "ordered"]):
+             ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main([tmp] + argv)  # each must fail with a clean usage error, not a traceback
@@ -178,4 +178,13 @@ for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "
         assert e.code == 2, argv
     else:
         raise AssertionError(argv)
+# --look: a recipe of flags; flags the user types win; its post effects are dropped for text output.
+def text_of(argv):
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        main([tmp, "-w", "30"] + argv)
+    return set(out.getvalue()) - {"\n"}
+assert text_of(["--look", "matrix"]) <= set("10 ") and text_of(["--look", "matrix"]) - {" "}, "binary glyphs, no --post error"
+assert text_of(["--look", "matrix", "-c", "minimal"]) <= set("#+. "), "the typed -c wins over the recipe"
+main([tmp, "--look", "gameboy", "-w", "20", "-o", tmp + ".look.png"])
+assert {c for _, c in Image.open(tmp + ".look.png").getcolors()} <= set(RETRO["gameboy"])
 print("ok")

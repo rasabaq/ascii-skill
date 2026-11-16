@@ -681,8 +681,37 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, mode="ram
     return img
 
 
+# --look NAME: a recipe of flags. They go first, so any flag the user also types wins.
+LOOKS = {
+    "matrix": ["-c", "binary", "--fg", "matrix", "--post", "scan,bloom,vignette"],
+    "terminal": ["-c", "terminal", "--fg", "amber", "--post", "crt"],
+    "noir": ["-c", "standard", "--fg", "#ece9e2", "--contrast", "1.3", "--post", "grain,vignette"],
+    "vhs": ["--mode", "halfblock", "--post", "chroma,scan,grain,vignette"],
+    "c64": ["--mode", "halfblock", "--colors", "c64", "--dither", "bayer"],
+    "pico8": ["--mode", "halfblock", "--colors", "pico8", "--dither", "bayer"],
+    "gameboy": ["--mode", "halfblock", "--colors", "gameboy", "--dither", "bayer"],
+    "scoreboard": ["--mode", "led", "--fg", "amber"],
+    "newspaper": ["--mode", "dots", "--bg", "white", "--fg", "black"],
+}
+
+
+def parse_look(p, argv, files):
+    """Parse argv. With --look NAME the recipe's flags go first, so flags the user typed still win.
+    A recipe's post effects are dropped when the output is not one of `files` (text, HTML, terminal)."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    a = p.parse_args(argv)
+    if not a.look:
+        return a
+    typed = a.post
+    a = p.parse_args(LOOKS[a.look] + argv)
+    if not typed and os.path.splitext(a.output or "")[1].lower() not in files:
+        a.post = ()
+    return a
+
+
 def add_poster_args(p):
-    """Words and tiles options, shared with animate.py."""
+    """--look, and the words and tiles options, shared with animate.py."""
+    p.add_argument("--look", choices=LOOKS, help="a recipe of flags: %s; your own flags win" % ", ".join(LOOKS))
     p.add_argument("--words", default=WORDS, help="words mode: vocabulary, space or comma separated")
     p.add_argument("--seed", type=int, default=0, help="words/tiles: seed for the layout or glyphs (default 0)")
     p.add_argument("--accent", help="words mode: box color for the most colorful words, e.g. #f28c28")
@@ -741,7 +770,7 @@ def main(argv=None):
     add_poster_args(p)
     p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
                    help="PNG/JPG/WebP: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
-    a = p.parse_args(argv)
+    a = parse_look(p, argv, (".png", ".jpg", ".jpeg", ".webp"))
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, ext not in ("", ".txt"))
     if ext not in ("", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp"):

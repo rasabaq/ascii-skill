@@ -24,7 +24,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, RETRO, poster_defaults, rgb, snap, snap_grid, to_ansi, to_png)
+                   POSTER_BG, RETRO, parse_look, poster_defaults, rgb, snap, snap_grid, to_ansi, to_png)
 import effects  # noqa: E402
 import post  # noqa: E402
 import scenes  # noqa: E402
@@ -373,7 +373,7 @@ def main(argv=None):
     add_poster_args(p)
     p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
                    help="GIF/WebP/MP4: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
-    a = p.parse_args(argv)
+    a = parse_look(p, argv, (".gif", ".webp", ".mp4"))
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
     user_bg = a.bg

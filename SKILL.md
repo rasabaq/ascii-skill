@@ -1,6 +1,6 @@
 ---
 name: ascii-art
-description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes an ASCII animation from a short description such as "a running horse", using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
+description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes an ASCII animation from a short description such as "a running horse", using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix", CRT, VHS, retro console (C64, PICO-8, Game Boy), LED board or halftone look.
 ---
 
 # ASCII art
@@ -130,6 +130,26 @@ uv run scripts/ascii.py photo.jpg --mode tiles -w 36 -o poster.png
 - In `animate.py` the layout stays the same in every frame; only the brightness changes.
 
 Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
+
+## Looks
+
+`--look NAME` sets a whole recipe of flags in one word. Flags you type as well still win, so `--look matrix -c minimal` keeps the green and the glow but uses the `minimal` ramp. A look's post effects are skipped for text, HTML and terminal output.
+
+| Look | Same as |
+|---|---|
+| `matrix` | `-c binary --fg matrix --post scan,bloom,vignette` |
+| `terminal` | `-c terminal --fg amber --post crt` |
+| `noir` | `-c standard --fg "#ece9e2" --contrast 1.3 --post grain,vignette` |
+| `vhs` | `--mode halfblock --post chroma,scan,grain,vignette` |
+| `c64`, `pico8`, `gameboy` | `--mode halfblock --colors NAME --dither bayer` |
+| `scoreboard` | `--mode led --fg amber` |
+| `newspaper` | `--mode dots --bg white --fg black` (add `--invert` for art on a black background, such as a scene) |
+
+```bash
+uv run scripts/ascii.py photo.jpg --look noir -w 140 -o noir.png
+uv run scripts/animate.py --scene rain --look matrix -o matrix.mp4
+uv run scripts/animate.py --scene tree --look gameboy -o tree.gif
+```
 
 ## Presets
 
