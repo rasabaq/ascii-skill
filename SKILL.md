@@ -131,7 +131,7 @@ uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --
 
 ### Effects for still images
 
-`--effect NAME` turns one image into a 2–3 second intro at 25 fps that ends on the finished art and holds it for 1.5 seconds. Every effect works with every mode.
+`--effect NAME` turns one image into a 2 to 3.2 second intro at 25 fps that ends on the finished art and holds it for 1.5 seconds. Every effect works with every mode.
 
 - `matrix`: falling columns of glyphs with a bright head, leaving the art behind them.
 - `decode`: cells scramble through random glyphs and lock in, sweeping left to right.

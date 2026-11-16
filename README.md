@@ -48,7 +48,7 @@ uv run scripts/test_ascii.py
 uv run scripts/test_animate.py
 uv run scripts/test_scenes.py
 uv run scripts/test_fetch.py
-uv run --with pillow python scripts/test_effects.py
+uv run scripts/test_effects.py
 ```
 
 ## License
