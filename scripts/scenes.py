@@ -463,3 +463,143 @@ def text(w, h, n, seed, word="ASCII"):
             x += cw + gap
         out.append(_shrink(im, w, h))
     return out
+
+
+def _city_layer(rng, W, H, u, P, top, width, body, win, pitch, lit, bright, flick=0.0, tallest=None):
+    """One strip of buildings, P wide. Buildings never cross the strip's edges, so tiling it has no seam.
+    Returns the strip (RGBA) and the lights that switch on and off: (shape, box, color, times per loop, phase, duty)."""
+    strip = Image.new("RGBA", (P, H))
+    draw = ImageDraw.Draw(strip)
+    rim = tuple(min(255, round(c * 1.6 + 30)) for c in body) + (255,)
+    dark = tuple(round(c * 1.5 + 4) for c in body) + (255,)
+    warm = [(255, 214, 140), (255, 190, 100), (255, 236, 190), (200, 220, 255)]
+    flips = []
+    x = rng.uniform(0, 4 * u)
+    while P - x > width[0] * u:
+        bw = min(rng.uniform(*width) * u, P - x - u)
+        tall = tallest is not None and x <= tallest * P < x + bw + 10 * u
+        y = (0.3 if tall else rng.uniform(*top)) * H
+        if tall:
+            bw = max(bw, 34 * u)
+        x0, x1 = round(x), round(x + bw)
+        draw.rectangle((x0, y, x1, H), fill=body + (255,))
+        roof = "spire" if tall else rng.choice(("flat", "step", "antenna", "tank", "flat"))
+        cx = (x0 + x1) / 2
+        if roof == "step" or roof == "spire":  # setbacks: narrower blocks on top
+            for i, s in enumerate((0.7, 0.42)):
+                hw, ty = bw * s / 2, y - (i + 1) * 9 * u
+                draw.rectangle((cx - hw, ty, cx + hw, ty + 9 * u), fill=body + (255,))
+                draw.rectangle((cx - hw, ty, cx + hw, ty + u), fill=rim)
+            if roof == "spire":
+                tip = y - 18 * u - 34 * u
+                draw.polygon([(cx - 5 * u, y - 18 * u), (cx + 5 * u, y - 18 * u), (cx, tip)], fill=body + (255,))
+                draw.line([(cx, tip), (cx, tip - 8 * u)], fill=rim, width=max(1, round(u)))
+                r, ly = 2 * u, tip - 8 * u  # aviation light: a red glow that blinks 4 times a loop
+                draw.ellipse((cx - r, ly - r, cx + r, ly + r), fill=(80, 12, 14, 255))
+                flips.append(("ellipse", (cx - 2.4 * r, ly - 2.4 * r, cx + 2.4 * r, ly + 2.4 * r), (190, 28, 30), 4, 0, 0.3))
+                flips.append(("ellipse", (cx - r, ly - r, cx + r, ly + r), (255, 50, 45), 4, 0, 0.3))
+        elif roof == "antenna":
+            ax = rng.uniform(x0 + 0.25 * bw, x1 - 0.25 * bw)
+            ah = rng.uniform(12, 26) * u
+            draw.line([(ax, y), (ax, y - ah)], fill=rim, width=max(1, round(u)))
+            draw.line([(ax - 3 * u, y - 0.6 * ah), (ax + 3 * u, y - 0.6 * ah)], fill=rim, width=max(1, round(u)))
+        elif roof == "tank" and bw > 14 * u:  # a water tank on legs with a cone lid
+            tx = rng.uniform(x0 + 2 * u, x1 - 12 * u)
+            draw.line([(tx + 2 * u, y), (tx + 2 * u, y - 5 * u)], fill=body + (255,), width=max(1, round(u)))
+            draw.line([(tx + 8 * u, y), (tx + 8 * u, y - 5 * u)], fill=body + (255,), width=max(1, round(u)))
+            draw.rectangle((tx, y - 13 * u, tx + 10 * u, y - 5 * u), fill=body + (255,))
+            draw.polygon([(tx - u, y - 13 * u), (tx + 11 * u, y - 13 * u), (tx + 5 * u, y - 18 * u)], fill=rim)
+        else:  # flat roof with a small stair house
+            sx = rng.uniform(x0 + 2 * u, max(x0 + 2 * u, x1 - 10 * u))
+            draw.rectangle((sx, y - 5 * u, sx + 8 * u, y), fill=body + (255,))
+        draw.rectangle((x0, y, x1, y + u), fill=rim)  # a moonlit roof edge keeps the outline readable
+        ww, wh = win[0] * u, win[1] * u
+        px, py = pitch[0] * u, pitch[1] * u
+        cols = max(1, int((bw - 2 * u - ww) // px) + 1)
+        left = cx - ((cols - 1) * px + ww) / 2
+        p = lit * rng.uniform(0.3, 1.7)  # some buildings are busy offices, some are asleep
+        tint = rng.choice(warm[:3] if rng.random() < 0.8 else warm[3:])
+        row = y + 4 * u
+        while row + wh < H:
+            for c in range(cols):
+                box = (round(left + c * px), round(row), round(left + c * px + ww) - 1, round(row + wh) - 1)
+                col = tuple(round(v * bright * rng.uniform(0.8, 1)) for v in tint)
+                if rng.random() < flick:
+                    draw.rectangle(box, fill=dark)
+                    flips.append(("rectangle", box, col, rng.choice((1, 1, 2)), rng.random(), rng.uniform(0.35, 0.65)))
+                else:
+                    draw.rectangle(box, fill=col + (255,) if rng.random() < p else dark)
+            row += py
+        x += bw + rng.uniform(1, 9) * u
+    return strip, flips
+
+
+@scene(320, 240, 64, 20)
+def city(w, h, n, seed):
+    """A night skyline sliding past. Three building strips (far, middle, near) each move one strip width
+    per loop, and the strips are 1/2, 1 and 1.5 screens wide, so the near ones move 3x as fast as the far
+    ones and every layer is back where it started. Windows blink and the train crosses whole times per loop."""
+    rng = random.Random(seed)
+    W, H, u = w * SS, h * SS, h * SS / 240  # u: one pixel at 320x240
+    grad = Image.new("L", (1, H))
+    grad.putdata([min(255, round(255 * y / (0.8 * H))) for y in range(H)])
+    sky = _colorize(grad.resize((W, H)), _lut([(0, (3, 5, 18)), (0.6, (16, 18, 46)), (1, (62, 40, 80))]))
+    draw = ImageDraw.Draw(sky)
+    mx, my, mr = 0.8 * W, 0.17 * H, 0.06 * H
+    for _ in range(70):
+        x, y = rng.uniform(0, W), rng.uniform(0, 0.5 * H)
+        if math.hypot(x - mx, y - my) > 3 * mr:
+            r, v = rng.choice((0.6, 0.6, 1.0)) * u, rng.randint(90, 200)
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=(v, v, min(255, v + 25)))
+    for i in range(14):  # moon halo: rings from wide and dim to tight and bright
+        q, r = i / 13, mr * (2.8 - 1.7 * i / 13)
+        draw.ellipse((mx - r, my - r, mx + r, my + r), fill=tuple(round(a + (b - a) * q * q) for a, b in zip((8, 10, 30), (70, 70, 100))))
+    draw.ellipse((mx - mr, my - mr, mx + mr, my + mr), fill=(250, 246, 222))
+    for dx, dy, cr in ((-0.3, -0.2, 0.22), (0.25, 0.25, 0.16), (0.1, -0.35, 0.1)):
+        draw.ellipse((mx + (dx - cr) * mr, my + (dy - cr) * mr, mx + (dx + cr) * mr, my + (dy + cr) * mr), fill=(222, 218, 198))
+    layers = [  # strip width, layer, then: tops (share of H), widths, body, window size, pitch, lit, brightness, flicker
+        (W // 2, _city_layer(rng, W, H, u, W // 2, (0.36, 0.6), (14, 30), (80, 90, 138), (2, 2), (4, 5), 0.25, 0.55)),
+        (W, _city_layer(rng, W, H, u, W, (0.36, 0.58), (22, 44), (34, 38, 66), (3, 3), (6, 7), 0.3, 0.8, 0.02, 0.3)),
+        (3 * W // 2, _city_layer(rng, W, H, u, 3 * W // 2, (0.44, 0.7), (40, 76), (7, 7, 12), (4, 5), (8, 9), 0.35, 1.0, 0.03)),
+    ]
+    deck, gap = 0.82 * H, W / 4  # elevated track: pillars every quarter screen, moving 2 screens per loop
+    cars, cl, ch = 3, 0.3 * W, 17 * u
+    train = cars * cl + (cars - 1) * 3 * u
+    lit = [[rng.random() < 0.85 for _ in range(int((cl - 10 * u) // (10 * u)))] for _ in range(cars)]
+    out = []
+    for k in range(n):
+        t = k / n
+        im = sky.copy()
+        draw = ImageDraw.Draw(im)
+        for P, (strip, flips) in layers:
+            s = round(P * t) % P
+            for x in range(-s, W, P):
+                im.paste(strip, (x, 0), strip)
+                for shape, box, col, times, ph, duty in flips:
+                    if (t * times + ph) % 1 < duty and x + box[2] >= 0 and x + box[0] < W:
+                        getattr(draw, shape)((box[0] + x, box[1], box[2] + x, box[3]), fill=col)
+        left = t * (W + train + 0.3 * W) - train - 0.15 * W  # once across per loop, against the scroll
+        for c in range(cars):
+            x0, top = left + c * (cl + 3 * u), deck - ch - 2 * u
+            draw.rounded_rectangle((x0, top, x0 + cl, deck), radius=3 * u, fill=(104, 112, 134))
+            draw.rectangle((x0 + 2 * u, top + u, x0 + cl - 2 * u, top + 2.5 * u), fill=(150, 158, 180))
+            if c == cars - 1:  # sloped nose and headlight
+                draw.polygon([(x0 + cl - 8 * u, top), (x0 + cl + 6 * u, deck), (x0 + cl - 8 * u, deck)], fill=(104, 112, 134))
+                draw.ellipse((x0 + cl - u, deck - 7 * u, x0 + cl + 3 * u, deck - 3 * u), fill=(255, 255, 230))
+            for i, on in enumerate(lit[c]):
+                wx = x0 + 6 * u + i * 10 * u
+                draw.rectangle((wx, top + 5 * u, wx + 6 * u, top + 10 * u), fill=(255, 238, 185) if on else (40, 44, 58))
+        draw.rectangle((0, deck - 3 * u, W, deck + 3 * u), fill=(62, 66, 86))
+        draw.rectangle((0, deck - 3 * u, W, deck - 2 * u), fill=(118, 122, 142))
+        draw.rectangle((0, deck + 3 * u, W, deck + 11 * u), fill=(34, 37, 52))
+        s = 2 * W * t
+        step = W / 32
+        for i in range(34):  # truss diagonals
+            x = i * step - s % step
+            draw.line([(x, deck + 3 * u), (x + step / 2, deck + 11 * u), (x + step, deck + 3 * u)], fill=(66, 70, 90), width=max(1, round(u)))
+        for i in range(6):
+            x = i * gap - s % gap
+            draw.rectangle((x, deck + 11 * u, x + 10 * u, H), fill=(30, 33, 46))
+            draw.rectangle((x, deck + 11 * u, x + 2 * u, H), fill=(52, 56, 74))
+        out.append(_shrink(im, w, h))
+    return out
