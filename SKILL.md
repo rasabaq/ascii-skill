@@ -1,6 +1,6 @@
 ---
 name: ascii-art
-description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
+description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes an ASCII animation from a short description such as "a running horse", using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
 ---
 
 # ASCII art
@@ -121,6 +121,19 @@ uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a s
 - `scan`: a bright CRT line sweeps down and types each row in, with a short glow.
 - `glitch`: short bursts of torn rows, glyph swaps and red/cyan bands. Loops well.
 - `wave`: rows sway sideways on a sine wave that swells and calms. Loops well.
+
+### From a description
+
+When the user describes a moving thing ("a running horse") instead of giving a file, find a free clip first. `scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
+
+1. Fetch a clip: `uv run scripts/fetch.py "running horse" -o /tmp/clip`. It adds the right extension (`.gif`, `.webm`), then prints the saved path and an attribution line. To choose yourself, run with `--list` first, then `--pick N`.
+2. Convert the printed path: `uv run scripts/animate.py /tmp/clip.gif --mode braille -w 80 --bg white -o out.gif`. Any preset works. For long videos add `--duration 5`.
+3. Look at a frame of the result. If the subject is hard to see, try `--pick` with another result.
+4. Give the user the attribution line with the result. Most licenses (CC BY, CC BY-SA) require it.
+
+Search with short plain English words for the subject and the motion. Line drawings, silhouettes and clips on a plain background read best as ASCII. Busy real-world video often does not.
+
+If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (`fire`, `donut`, `cube`, `waves`, `stars`, `walker`).
 
 ## Python use
 
