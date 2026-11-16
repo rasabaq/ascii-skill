@@ -31,6 +31,22 @@ CHARSETS = {
     "dots": "⣿⣷⣯⣟⡿⢿⣻⣽⣾⣶⣦⣤⣀⡀ ",
 }
 COLORS = {"matrix": "#00ff41", "amber": "#ffb000", "cyan": "#00e5ff", "magenta": "#ff3df2", "mint": "#9dffb0"}
+# Retro palettes for --colors. C64 is Pepto's measured palette; ZX uses 0xD7 for normal and 0xFF for bright.
+RETRO = {name: tuple(tuple(bytes.fromhex(h)) for h in hexes.split()) for name, hexes in {
+    "c64": "000000 ffffff 68372b 70a4b2 6f3d86 588d43 352879 b8c76f 6f4f25 433900 9a6759 444444 6c6c6c 9ad284 6c5eb5 959595",
+    "pico8": "000000 1d2b53 7e2553 008751 ab5236 5f574f c2c3c7 fff1e8 ff004d ffa300 ffec27 00e436 29adff 83769c ff77a8 ffccaa",
+    "gameboy": "0f380f 306230 8bac0f 9bbc0f",
+    "cga": "000000 55ffff ff55ff ffffff",
+    "zx": "000000 0000d7 d70000 d700d7 00d700 00d7d7 d7d700 d7d7d7 0000ff ff0000 ff00ff 00ff00 00ffff ffff00 ffffff",
+    "mono": "000000 ffffff",
+}.items()}
+# 8x8 Bayer matrix: each step splits every cell into 2x2 in the order 0 2 / 3 1, so thresholds spread evenly.
+BAYER = [[0]]
+for _ in range(3):
+    BAYER = [[4 * BAYER[y % len(BAYER)][x % len(BAYER)] + (0, 2, 3, 1)[2 * (y // len(BAYER)) + x // len(BAYER)]
+              for x in range(2 * len(BAYER))] for y in range(2 * len(BAYER))]
+CHROMA = 5  # hue counts this much against brightness when matching colors, so grays stay gray
+MIX_PENALTY = 0.05  # cost of a dither pattern's contrast: prefer mixing near colors, but still mix
 # Monospace first, then fonts that cover braille and other symbols.
 FONTS = ["Menlo.ttc", "DejaVuSansMono.ttf", "consola.ttf", "LiberationMono-Regular.ttf", "cour.ttf",
          "Courier.ttc", "Apple Symbols.ttf", "seguisym.ttf", "DejaVuSans.ttf", "NotoSansSymbols2-Regular.ttf"]
@@ -83,6 +99,67 @@ def dither_levels(levels, width, top):
                 levels[i + off] += err * w / 16
 
 
+def bayer(x, y):
+    """Ordered-dither threshold (0-1) at output pixel (x, y). It depends only on the position, so a
+    still area gets the same pattern in every frame: no crawl in animation."""
+    return (BAYER[y % 8][x % 8] + 0.5) / 64
+
+
+def _ycc(c, chroma):
+    """Brightness and two color-difference axes (JPEG's YCbCr). Plain distance here matches the eye better
+    than RGB; `chroma` sets how much hue counts against brightness."""
+    r, g, b = c
+    k = chroma ** 0.5
+    return 0.299 * r + 0.587 * g + 0.114 * b, k * (0.5 * b - 0.1687 * r - 0.3313 * g), k * (0.5 * r - 0.4187 * g - 0.0813 * b)
+
+
+def _dot(u, v):
+    return sum(a * b for a, b in zip(u, v))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _mix(c, pal, ordered):
+    """(a, b, t): the two palette colors whose mix a + t(b - a) looks most like c (t in 0-1), after
+    Yliluoma's ordered dither. The pattern's own contrast t(1 - t)|b - a|^2 is a small extra cost, so near
+    colors mix before far ones: a gray stays gray, not a black-and-white checker.
+    Without `ordered` it is just the nearest color (t = 0). Black and white first map to the palette's
+    darkest and lightest color. A palette without black (Game Boy greens) is shades of one tint, so it
+    matches on brightness alone."""
+    lums = [_lum(p) for p in pal]
+    k = CHROMA if min(lums) == 0 else 0
+    q = _ycc([min(lums) + v * (max(lums) - min(lums)) / 255 for v in c], k)
+    pts = {p: _ycc(p, k) for p in pal}
+    near = sorted(pal, key=lambda p: sum((x - y) ** 2 for x, y in zip(q, pts[p])))  # nearest first
+    if not ordered:
+        return near[0], near[0], 0
+    best = None
+    for i, a in enumerate(near[:4]):  # ponytail: only mixes of the 4 nearest colors; good mixes are local
+        u = [x - y for x, y in zip(q, pts[a])]
+        for b in near[i:4]:
+            d = [x - y for x, y in zip(pts[b], pts[a])]
+            dd = _dot(d, d)
+            t = min(1, max(0, _dot(u, d) / dd)) if dd else 0
+            e = [x - t * y for x, y in zip(u, d)]
+            err = _dot(e, e) + MIX_PENALTY * t * (1 - t) * dd
+            if best is None or err < best[0]:
+                best = err, a, b, t
+    return best[1:]
+
+
+def snap(c, colors, x=0, y=0, ordered=False):
+    """Color c snapped to a palette (a RETRO name or a list of RGB colors). With `ordered`, Bayer-dither
+    between the two colors whose mix matches c, at output pixel (x, y)."""
+    a, b, t = _mix(tuple(c[:3]), tuple(map(tuple, RETRO[colors] if isinstance(colors, str) else colors)), ordered)
+    return b if t > bayer(x, y) else a
+
+
+def snap_grid(grid, colors, ordered=False):
+    """Every color in the grid snapped to a palette. The dither runs on output pixels: one per cell,
+    two per halfblock cell (top and bottom), so the pattern is square and stays put between frames."""
+    return [[(c[0],) + tuple(snap(v, colors, x, 2 * y + k if c[0] == HALF else y, ordered)
+                             for k, v in enumerate(c[1:])) for x, c in enumerate(row)] for y, row in enumerate(grid)]
+
+
 def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1.0,
             invert=False, dither=False, bg="black", mode="ramp", sharpen=False, autocontrast=True,
             words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None):
@@ -98,6 +175,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     Glyphs are random from `seed`, or ramp glyphs when `charset` is given.
     autocontrast=False skips the per-image tonal stretch (animate.py applies one shared stretch).
     `cut` (0-1) sets the braille dot threshold; animate.py passes one for the whole clip.
+    `dither` is True (Floyd-Steinberg) or "bayer" (ordered, anchored to the pixel grid, so it holds still in
+    animation). Halfblock has no levels to dither: snap its colors with snap_grid(grid, "pico8", ordered=True).
     """
     ramp = CHARSETS.get(charset or "standard", charset)
     if len(ramp) < 2:
@@ -146,7 +225,9 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     # Braille dots without dither: threshold at the image's mean, so mid-tone ink (a blue logo) still shows.
     if cut is None:
         cut = min(0.75, max(0.25, sum(levels) / len(levels))) if mode == "braille" and not dither else 0.5
-    if dither:
+    if dither == "bayer":  # ordered: round up where the level beats the fixed threshold at this pixel
+        levels = [min(top, int(v + bayer(i % pw, i // pw))) for i, v in enumerate(levels)]
+    elif dither:
         dither_levels(levels, pw, top)
     # Braille color is the average of the cell's 8 pixels.
     raw = (small if sx == sy == 1 else small.resize((width, rows), Image.Resampling.BOX)).tobytes()
@@ -409,9 +490,19 @@ def _braille(ch):
     return "\u2800" <= ch <= "\u28ff"
 
 
-def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
+@functools.lru_cache(maxsize=8)
+def _dots(size, k):
+    """Mask (L) of a whole image: 255 where the Bayer threshold is below k, so it covers a share k."""
+    w, h = size
+    rows = [bytes(255 * (k > bayer(x, y)) for x in range(w)) for y in range(8)]
+    return Image.frombytes("L", size, b"".join(rows[y % 8] for y in range(h)))
+
+
+def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, pure=False):
     """`gap` (px) leaves a border of background around each background cell, for a tile look.
-    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows."""
+    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows.
+    `pure` (for --colors) adds no new colors: glyphs are not antialiased, and ░▒▓ are fixed dot patterns
+    of ink on the page, as a terminal font draws them, instead of a blend."""
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     cw = max(1, round(font_size * CELL_W))
     chh = max(1, round(cw / aspect))  # cell shape matches the aspect used to sample the image
@@ -421,6 +512,8 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
     mode, back = ("RGBA", (0, 0, 0, 0)) if bg == "none" else ("RGB", rgb(bg))
     img = Image.new(mode, (len(grid[0]) * cw, len(grid) * chh), back)
     draw = ImageDraw.Draw(img)
+    if pure:
+        draw.fontmode = "1"
     for y, row in enumerate(grid):
         for x, (ch, c, *under) in enumerate(row):
             ink = fg or c
@@ -433,6 +526,9 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
                 mid = y * chh + chh // 2
                 draw.rectangle((x * cw, y * chh, (x + 1) * cw - 1, mid - 1), fill=c)
                 draw.rectangle((x * cw, mid, (x + 1) * cw - 1, (y + 1) * chh - 1), fill=under[0])
+            elif ch in SHADES and pure:
+                box = (x * cw, y * chh, (x + 1) * cw, (y + 1) * chh)
+                img.paste(ink + (255,) * (mode == "RGBA"), box, _dots(img.size, SHADES[ch]).crop(box))
             elif ch in SHADES:
                 k = SHADES[ch]
                 fill = ink + (round(255 * k),) if mode == "RGBA" else tuple(round(b + (i - b) * k) for b, i in zip(back, ink))
@@ -457,11 +553,15 @@ def add_poster_args(p):
 
 def poster_defaults(a, image):
     """Fill options left unset. Tiles: square cells, big glyphs, a thin gap. Words and tiles: a charcoal page.
+    --colors: the palette's darkest color as the page (the Game Boy's dark green); words mode ignores it, as --fg.
     Words: the gap only parts stacked rows, so a word's box stays whole. Text stays at aspect 0.5,
     because a terminal char is twice as tall as it is wide."""
     tiles = a.mode == "tiles"
+    if a.mode == "words":
+        a.colors = None  # word ink carries the image
     defaults = {"aspect": 1.0 if tiles and image else 0.5, "font_size": 80 if tiles else 12,
-                "bg": POSTER_BG if a.mode in ("words", "tiles") else "black"}
+                "bg": POSTER_BG if a.mode in ("words", "tiles") else
+                "#%02x%02x%02x" % min(RETRO[a.colors], key=_lum) if a.colors else "black"}
     for k, v in defaults.items():
         if getattr(a, k) is None:
             setattr(a, k, v)
@@ -483,7 +583,9 @@ def main(argv=None):
     p.add_argument("--contrast", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--brightness", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--invert", action="store_true", help="swap light and dark")
-    p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering")
+    p.add_argument("--dither", nargs="?", const="fs", choices=("fs", "bayer"),
+                   help="Floyd-Steinberg dithering; --dither bayer: ordered 8x8 crosshatch, also for --colors")
+    p.add_argument("--colors", choices=RETRO, help="snap every color to this retro palette")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (PNG/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color. Default: colors from the photo" % ", ".join(COLORS))
     p.add_argument("--color", action="store_true", help="truecolor ANSI escape codes in text output")
@@ -506,10 +608,13 @@ def main(argv=None):
     try:
         grid = convert(load(a.image), a.width, a.charset, a.aspect, a.contrast, a.brightness,
                        a.invert, a.dither, "black" if a.bg == "none" else a.bg, a.mode, a.sharpen,
-                       words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level, palette=a.palette)
+                       words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level,
+                       palette=RETRO[a.colors] if a.colors else a.palette)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
+        if a.colors:
+            grid, fg = snap_grid(grid, a.colors, a.dither == "bayer"), fg and snap(fg, a.colors)
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
-            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap)
+            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap, pure=bool(a.colors))
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
             with open(a.output, "w", encoding="utf-8") as out:

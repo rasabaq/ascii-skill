@@ -119,6 +119,23 @@ frames[0].save(blinky, save_all=True, append_images=[on, frames[0], on], duratio
 rows = player_rows([blinky, "--mode", "braille", "-w", "20"], os.path.join(tmp, "blink.html"))
 assert len({tuple(line.ljust(20)[12:] for line in r) for r in rows}) == 1, rows
 
+# Retro palette with Bayer dither: only palette colors, and the still right half is the same in every frame.
+from ascii import RETRO  # noqa: E402
+box = []
+for k in range(4):
+    im = Image.linear_gradient("L").rotate(90).resize((80, 40)).convert("RGB")
+    ImageDraw.Draw(im).rectangle((2 + 5 * k, 10, 12 + 5 * k, 25), fill="white")
+    box.append(im)
+retro = os.path.join(tmp, "retro.gif")
+box[0].save(retro, save_all=True, append_images=box[1:], duration=100, loop=0)
+for args in ([retro], [retro, "--mode", "halfblock"], ["--scene", "planet", "--fps", "2"]):
+    main(args + ["--colors", "gameboy", "--dither", "bayer", "-w", "40", "-o", os.path.join(tmp, "gb.gif")])
+    shown = [f.convert("RGB") for f in ImageSequence.Iterator(Image.open(os.path.join(tmp, "gb.gif")))]
+    assert {c for f in shown for _, c in f.getcolors()} <= set(RETRO["gameboy"]), args
+    if args[0] == retro:
+        w, h = shown[0].size
+        assert len({f.crop((w // 2, 0, w, h)).tobytes() for f in shown}) == 1, (args, "the dither does not crawl")
+
 # Video: non-square pixels are shown at their display shape.
 if shutil.which("ffmpeg") and shutil.which("ffprobe"):
     vid = os.path.join(tmp, "anamorphic.mp4")
