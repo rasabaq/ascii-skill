@@ -107,10 +107,27 @@ uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a s
 - Input: animated GIF, WebP or APNG, any video ffmpeg reads, or a still image with `--effect`.
 - Frame timing comes from the source. `--fps` resamples. `--start` and `--duration` pick a slice in seconds.
 - It stops at 300 frames by default and says so. Raise `--max-frames`, or lower `--fps`, for longer clips.
-- One tonal range is used for all frames, so brightness does not pump.
+- One tonal range (and in braille one dot threshold) is used for all frames, so brightness does not pump.
+- Still areas do not flicker: a pixel keeps its value until it changes by more than `--steady` (default 6, out of 255). Raise it to 16 or more for grainy film. `--steady 0` turns it off.
+- Interlaced video is deinterlaced, and video with non-square pixels keeps its real shape.
 - Avoid `--dither` for animation: it makes the glyphs crawl from frame to frame.
 - GIF cannot play faster than about 50 fps, so fast video drops some frames in `.gif`. Use `.mp4` or `.webp` for smooth 60 fps.
-- Light subject on a light background shows as a solid block: add `--bg white`.
+
+### Figures on a plain background
+
+For a dark figure on a light background, like the Muybridge running horse, use `--bg white`. Then the figure gets the ink and the page stays clean. `--mode braille` gives the sharpest moving figure, and `--mode halfblock` keeps the photo's tones.
+
+```bash
+uv run scripts/animate.py horse.gif --mode braille --bg white -o horse.gif
+uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --subject -o juggler.gif
+```
+
+`--subject` keeps only what moves and paints the rest as an empty page (white when the background is light, unless you set `--bg`). It needs a still camera: it takes the background from the median of up to 25 frames. Notes:
+
+- Parts that hold still for most of the clip, like a head, count as background and fade out.
+- If the picture's edges keep changing, the camera moves: it says so and leaves the frames as they are. A slow pan is not always caught and leaves outlines behind.
+- In clips where each frame is a different photo (Muybridge's horse and buffalo), use `--bg white` instead.
+- `--subject-cut` (default 40, out of 255) is how much a pixel must differ from the background to count. Lower it for a faint figure, raise it for noisy video.
 
 ### Effects for still images
 
