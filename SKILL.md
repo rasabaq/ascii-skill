@@ -34,8 +34,9 @@ Paths below are relative to this skill's folder.
 | `--contrast 1.0` `--brightness 1.0` | Factors on top of the automatic contrast stretch. `1.0` means no change. |
 | `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. Put it after the image path (`--dither photo.jpg` reads the path as a dither name). |
 | `--dither bayer` | Ordered dithering with a fixed 8x8 pattern: the classic retro crosshatch. The pattern stays put from frame to frame, so it is safe for animation. With `--colors` it also dithers the colors. |
-| `--colors pico8` | Snap every color to a retro palette: `c64`, `pico8`, `gameboy` (4 greens), `cga` (black, cyan, magenta, white), `zx` (ZX Spectrum), `mono` (black and white). See "Retro palettes". |
+| `--colors pico8` | Snap every color to a retro palette: `c64`, `pico8`, `gameboy` (4 greens), `cga` (black, cyan, magenta, white), `zx` (ZX Spectrum), `mono` (black and white), and two gradient maps: `matrix` (greens) and `vaporwave` (purple to peach). See "Retro palettes". |
 | `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). |
+| `--backdrop 0.35` | Ramp, shape and braille: each cell gets a background of its own color at this strength (0-1), so color fields read. Best for paintings and color photos. |
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
 | `--font-size 12` | Glyph size in px for PNG/HTML. |
@@ -50,6 +51,7 @@ The script already stretches every image to its full tonal range, so most images
 - Want more detail at the same width: `--mode braille --dither --sharpen` for line-art style, `--mode halfblock` for a color photo.
 - Too much noise: use fewer columns or a shorter ramp (`-c minimal`).
 - Banding in gradients: add `--dither`.
+- Paintings and color photos look dim in ramp, shape or braille: glyphs cover little of each cell, so color fields fade. Add `--backdrop 0.35`: each cell gets a background of its own color at that strength (0-1), and the glyph stays bright on top. Works in PNG, HTML, GIF, video and the terminal (`--color`).
 - Chat output: never use `--color`, because escape codes show up as junk. Wrap the text in a code block.
 - SVG is not supported. Convert it to PNG first (`rsvg-convert -w 800 logo.svg -o logo.png`).
 
@@ -137,7 +139,8 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 
 | Look | Same as |
 |---|---|
-| `matrix` | `-c binary --fg matrix --post scan,bloom,vignette` |
+| `matrix` | `-c 01 --colors matrix --contrast 1.25 --post scan,bloom,vignette`: every cell a `0` or `1`, the tone in 7 greens |
+| `vaporwave` | `--mode halfblock --colors vaporwave --dither bayer --contrast 1.15 --post chroma,scan,bloom,vignette`: purple shadows, pink and peach highlights |
 | `terminal` | `-c terminal --fg amber --post crt` |
 | `noir` | `-c standard --fg "#ece9e2" --contrast 1.3 --post grain,vignette` |
 | `vhs` | `--mode halfblock --post chroma,scan,grain,vignette` |

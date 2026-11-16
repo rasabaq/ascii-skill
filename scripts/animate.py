@@ -443,7 +443,8 @@ def main(argv=None):
         def look(im, palette):
             return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
-                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut)  # same seed: same layout
+                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut,  # same seed: same layout
+                           tone=bool(a.colors), backdrop=a.backdrop)
 
         pal = RETRO[a.colors] if a.colors else a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker

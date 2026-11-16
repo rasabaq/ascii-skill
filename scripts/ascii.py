@@ -43,6 +43,8 @@ RETRO = {name: tuple(tuple(bytes.fromhex(h)) for h in hexes.split()) for name, h
     "cga": "000000 55ffff ff55ff ffffff",
     "zx": "000000 0000d7 d70000 d700d7 00d700 00d7d7 d7d700 d7d7d7 0000ff ff0000 ff00ff 00ff00 00ffff ffff00 ffffff",
     "mono": "000000 ffffff",
+    "matrix": "001405 00290b 004d14 00801e 00b82a 00ff41 7dffb0",  # no black: a dark-to-phosphor green map
+    "vaporwave": "1a0933 3b0f5e 6c1a8c a8259a ff3cac ff7eb6 ffb1a3 ffe3c4",  # no black: a purple-pink-peach gradient map
 }.items()}
 # 8x8 Bayer matrix: each step splits every cell into 2x2 in the order 0 2 / 3 1, so thresholds spread evenly.
 BAYER = [[0]]
@@ -173,7 +175,7 @@ def snap_grid(grid, colors, ordered=False):
 
 def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1.0,
             invert=False, dither=False, bg="black", mode="ramp", sharpen=False, autocontrast=True,
-            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None):
+            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None, tone=False, backdrop=0.0):
     """Return rows of (char, (r, g, b)) cells. `aspect` is char width / char height.
 
     mode "shape" maps brightness like "ramp", then gives each cell with an edge the ASCII symbol whose
@@ -186,6 +188,10 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     Glyphs are random from `seed`, or ramp glyphs when `charset` is given.
     autocontrast=False skips the per-image tonal stretch (animate.py applies one shared stretch).
     `cut` (0-1) sets the braille dot threshold; animate.py passes one for the whole clip.
+    `tone=True` keeps each glyph's true color instead of brightening it to read on the page: for --colors,
+    where the palette then carries the tone (a gradient palette lights dark parts dimly, not brightly).
+    `backdrop` (0-1) gives ramp, shape and braille cells a background of their own true color at that strength,
+    as (char, ink, background) cells: glyphs alone cover little of a cell, so color fields (paintings) read dim.
     `dither` is True (Floyd-Steinberg) or "bayer" (ordered, anchored to the pixel grid, so it holds still in
     animation). Halfblock has no levels to dither: snap its colors with snap_grid(grid, "pico8", ordered=True).
     """
@@ -261,8 +267,9 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         c = raw[i * 3:i * 3 + 3]
         # The glyph already shows brightness, so keep the hue but make the ink readable on the background.
         peak = max(c) or 1
-        scale = max(peak, 200) / peak if dark_bg else min(peak, 150) / peak
-        cells.append((ch, tuple(min(255, round(v * scale)) for v in c)))
+        scale = 1 if tone else max(peak, 200) / peak if dark_bg else min(peak, 150) / peak
+        ink = tuple(min(255, round(v * scale)) for v in c)
+        cells.append((ch, ink, tuple(round(b + (v - b) * backdrop) for b, v in zip(back, c))) if backdrop else (ch, ink))
     return [cells[r * width:(r + 1) * width] for r in range(rows)]
 
 
@@ -683,7 +690,9 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, mode="ram
 
 # --look NAME: a recipe of flags. They go first, so any flag the user also types wins.
 LOOKS = {
-    "matrix": ["-c", "binary", "--fg", "matrix", "--post", "scan,bloom,vignette"],
+    "matrix": ["-c", "01", "--colors", "matrix", "--contrast", "1.25", "--post", "scan,bloom,vignette"],
+    "vaporwave": ["--mode", "halfblock", "--colors", "vaporwave", "--dither", "bayer", "--contrast", "1.15",
+                  "--post", "chroma,scan,bloom,vignette"],
     "terminal": ["-c", "terminal", "--fg", "amber", "--post", "crt"],
     "noir": ["-c", "standard", "--fg", "#ece9e2", "--contrast", "1.3", "--post", "grain,vignette"],
     "vhs": ["--mode", "halfblock", "--post", "chroma,scan,grain,vignette"],
@@ -709,9 +718,19 @@ def parse_look(p, argv, files):
     return a
 
 
+def _unit(text):
+    """argparse type: a number from 0 to 1."""
+    v = float(text)
+    if not 0 <= v <= 1:
+        raise argparse.ArgumentTypeError("must be 0-1, got %s" % text)
+    return v
+
+
 def add_poster_args(p):
     """--look, and the words and tiles options, shared with animate.py."""
     p.add_argument("--look", choices=LOOKS, help="a recipe of flags: %s; your own flags win" % ", ".join(LOOKS))
+    p.add_argument("--backdrop", type=_unit, default=0.0, metavar="K",
+                   help="ramp/shape/braille: give each cell a background of its own color at strength 0-1 (try 0.35)")
     p.add_argument("--words", default=WORDS, help="words mode: vocabulary, space or comma separated")
     p.add_argument("--seed", type=int, default=0, help="words/tiles: seed for the layout or glyphs (default 0)")
     p.add_argument("--accent", help="words mode: box color for the most colorful words, e.g. #f28c28")
@@ -783,7 +802,7 @@ def main(argv=None):
         grid = convert(load(a.image), a.width, a.charset, a.aspect, a.contrast, a.brightness,
                        a.invert, a.dither, "black" if a.bg == "none" else a.bg, a.mode, a.sharpen,
                        words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level,
-                       palette=RETRO[a.colors] if a.colors else a.palette)
+                       palette=RETRO[a.colors] if a.colors else a.palette, tone=bool(a.colors), backdrop=a.backdrop)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
         if a.colors:
             grid, fg = snap_grid(grid, a.colors, a.dither == "bayer"), fg and snap(fg, a.colors)

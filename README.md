@@ -8,7 +8,7 @@ A free, open-source agent skill that turns images, GIFs and video into ASCII art
 - **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `city`, `tree`, `planet`, `gears`, all looping
 - **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`
 - **Post effects:** `--post crt,bloom,chroma,scan,vignette,grain` for PNG, GIF, WebP and MP4, steady from frame to frame
-- **Looks in one word:** `--look matrix|terminal|noir|vhs|c64|pico8|gameboy|scoreboard|newspaper`; your own flags still win
+- **Looks in one word:** `--look matrix|vaporwave|terminal|noir|vhs|c64|pico8|gameboy|scoreboard|newspaper`; your own flags still win
 - **Outputs:** plain text, truecolor terminal, HTML, PNG, JPG, WebP, GIF, MP4
 - **Styling:** 7 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), black, white or transparent background, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
 

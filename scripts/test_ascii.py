@@ -170,7 +170,7 @@ assert Image.open(tmp + ".gb.png").getpixel((0, 0)) == RETRO["gameboy"][0], "the
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
 assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
 for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"],
-             ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"]):
+             ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"], ["--backdrop", "1.5"]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main([tmp] + argv)  # each must fail with a clean usage error, not a traceback
@@ -183,8 +183,15 @@ def text_of(argv):
     with contextlib.redirect_stdout(io.StringIO()) as out:
         main([tmp, "-w", "30"] + argv)
     return set(out.getvalue()) - {"\n"}
-assert text_of(["--look", "matrix"]) <= set("10 ") and text_of(["--look", "matrix"]) - {" "}, "binary glyphs, no --post error"
+assert text_of(["--look", "matrix"]) == set("01"), "a full field of 0 and 1, and no --post error"
 assert text_of(["--look", "matrix", "-c", "minimal"]) <= set("#+. "), "the typed -c wins over the recipe"
 main([tmp, "--look", "gameboy", "-w", "20", "-o", tmp + ".look.png"])
 assert {c for _, c in Image.open(tmp + ".look.png").getcolors()} <= set(RETRO["gameboy"])
+# --backdrop: each cell gets a background of its own true color, blended from the page by K.
+red = Image.new("RGB", (8, 8), (200, 40, 40))
+cells = [c for row in convert(red, 4, backdrop=0.5, autocontrast=False) for c in row]
+assert all(len(c) == 3 and c[2] == (100, 20, 20) for c in cells), cells[0]
+cells = [c for row in convert(red, 4, backdrop=0.5, autocontrast=False, bg="white") for c in row]
+assert all(c[2] == (228, 148, 148) for c in cells), cells[0]
+assert all(len(c) == 2 for row in convert(red, 4, autocontrast=False) for c in row), "off by default"
 print("ok")
