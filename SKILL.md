@@ -122,6 +122,26 @@ uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a s
 - `glitch`: short bursts of torn rows, glyph swaps and red/cyan bands. Loops well.
 - `wave`: rows sway sideways on a sine wave that swells and calms. Loops well.
 
+### Scenes
+
+`--scene NAME` draws a looping animation in code, so no input file is needed. Each loop is 2 to 3.2 seconds, and the last frame flows into the first. Every mode, color option and output works. `--seed N` gives another variant (fire, waves, stars, rain), and `--fps` changes smoothness but keeps the loop length.
+
+```bash
+uv run scripts/animate.py --scene fire -o fire.gif                       # rising flames, warm colors
+uv run scripts/animate.py --scene donut -o donut.gif                     # a spinning, lit, frosted donut
+uv run scripts/animate.py --scene cube --mode braille -o cube.gif        # a tumbling cube with bright edges
+uv run scripts/animate.py --scene waves --mode halfblock -o waves.gif    # ocean swell under the moon
+uv run scripts/animate.py --scene stars -o stars.gif                     # flying through a starfield
+uv run scripts/animate.py --scene walker --mode braille -o run.gif       # a stick figure running in place
+uv run scripts/animate.py --scene rain --mode braille -o rain.gif        # rain with splashes
+uv run scripts/animate.py --scene bounce --mode halfblock -o ball.gif    # a ball that squashes as it bounces
+uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the word ASCII riding a rainbow wave
+```
+
+- Use `-w 60` to `-w 100`. `--mode halfblock` gives the best color; `--mode braille` gives the crispest lines.
+- Without `-o` the scene plays in the terminal.
+- A scene is a plain function in `scripts/scenes.py`: `scene(w, h, n, seed)` returns `n` images that loop. To add one, write the function and give it the `@scene(width, height, frames, fps)` line.
+
 ### From a description
 
 When the user describes a moving thing ("a running horse") instead of giving a file, find a free clip first. `scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
@@ -133,7 +153,7 @@ When the user describes a moving thing ("a running horse") instead of giving a f
 
 Search with short plain English words for the subject and the motion. Line drawings, silhouettes and clips on a plain background read best as ASCII. Busy real-world video often does not.
 
-If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (`fire`, `donut`, `cube`, `waves`, `stars`, `walker`).
+If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (see "Scenes").
 
 ## Python use
 

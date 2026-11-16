@@ -9,6 +9,7 @@
     uv run scripts/animate.py cat.gif -o out.gif          # also .webp, .mp4 (needs ffmpeg), .html
     uv run scripts/animate.py clip.mp4 -o out.html --start 2 --duration 5 --fps 12
     uv run scripts/animate.py photo.jpg --effect matrix -o intro.gif   # animate a still image
+    uv run scripts/animate.py --scene donut -o donut.gif           # a looping animation drawn in code
 """
 import argparse
 import html
@@ -25,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
                    POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
 import effects  # noqa: E402
+import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
 MARK2 = "\ue001"  # MARK2 + 6 hex = two-color (halfblock) cells: top and bottom color.
@@ -257,7 +259,7 @@ def play(texts, durs):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Turn a GIF, WebP, APNG or video into ASCII animation.")
-    p.add_argument("input", help="animated GIF/WebP/APNG, or any video ffmpeg can read")
+    p.add_argument("input", nargs="?", help="animated GIF/WebP/APNG, or any video ffmpeg can read")
     p.add_argument("-o", "--output", help="write .gif, .webp, .mp4 or .html; default plays in the terminal")
     p.add_argument("-w", "--width", type=int, help="columns (default 100; terminal: fit the window)")
     p.add_argument("-c", "--charset", help="%s, or your own ramp (default standard; tiles: random glyphs)" % ", ".join(CHARSETS))
@@ -278,8 +280,12 @@ def main(argv=None):
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
+    p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
+                   % ", ".join(scenes.SCENES))
     add_poster_args(p)
     a = p.parse_args(argv)
+    if bool(a.input) == bool(a.scene):
+        p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
@@ -292,11 +298,14 @@ def main(argv=None):
         back = rgb(bg)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image
         px = 2 * SUBPIXELS[a.mode][0] * (a.width or MAX_SIDE // 2)  # 2x the sampled pixels; convert() does the final resize
-        try:
-            Image.open(a.input).close()
-            src = timeline(pil_frames(a.input, back, px), a.start * 1000, (a.duration or 0) * 1000, a.fps, a.max_frames)
-        except Image.UnidentifiedImageError:
-            src = timeline(video_frames(a.input, a, px, a.max_frames), 0, 0, None, a.max_frames)
+        if a.scene:  # frames drawn in code (scenes.py); --seed varies them, --fps keeps the loop length
+            src = timeline(scenes.frames(a.scene, a.seed, a.fps), 0, 0, None, a.max_frames)
+        else:
+            try:
+                Image.open(a.input).close()
+                src = timeline(pil_frames(a.input, back, px), a.start * 1000, (a.duration or 0) * 1000, a.fps, a.max_frames)
+            except Image.UnidentifiedImageError:
+                src = timeline(video_frames(a.input, a, px, a.max_frames), 0, 0, None, a.max_frames)
         frames, truncated = src
         if not frames:
             raise ValueError("no frames in the chosen time range")
@@ -311,7 +320,7 @@ def main(argv=None):
             w, h = images[0].size
             width = max(1, min(cols - 1, int((lines - 1) * w / (h * a.aspect))))
         width = width or 100
-        lut = shared_lut(images)
+        lut = list(range(256)) * 3 if a.scene else shared_lut(images)  # scenes are drawn in their own colors
 
         def look(im, palette):
             return convert(im.point(lut), width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
