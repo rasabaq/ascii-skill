@@ -2,6 +2,8 @@
 # dependencies = ["pillow>=10.1"]
 # ///
 """Run: uv run scripts/test_animate.py"""
+import contextlib
+import io
 import json
 import os
 import random
@@ -53,6 +55,10 @@ blink = [frames[0], frames[0].copy()]
 ImageDraw.Draw(blink[0]).rectangle((0, 0, 79, 39), fill=(60, 60, 60))
 ImageDraw.Draw(blink[0]).rectangle((0, 0, 10, 10), fill="white")
 blink[1].paste((60, 60, 60), (0, 0, 80, 40))
+sky = Image.new("RGB", (40, 40), (20, 20, 30))
+sky.paste((200, 200, 200), (0, 20, 40, 40))
+r, g, b = sky.point(shared_lut([sky])).getpixel((0, 39))
+assert r == g == b, "the shared stretch keeps hues: gray stays gray"
 lut = shared_lut(blink)
 rows = [convert(b.point(lut), 20, autocontrast=False)[3] for b in blink]
 assert rows[0][-5:] == rows[1][-5:], "background stays the same"
@@ -126,4 +132,19 @@ if shutil.which("ffmpeg") and shutil.which("ffprobe"):
                     "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", vid], check=True)
     img, _ = next(video_frames(vid, Namespace(fps=None, start=0, duration=None), 480, 5))
     assert abs(img.width / img.height - 16 / 9) < 0.02, img.size
+# Bad option mixes stop with one clear line, never a traceback or a silent ignore.
+svg = os.path.join(tmp, "logo.svg")
+with open(svg, "w") as f:
+    f.write('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>')
+for argv, says in (([src, "--subject", "--subject-cut", "0"], "--subject-cut > 0"),
+                   (["--scene", "fire", "--duration", "1"], "--scene is one short loop"),
+                   ([svg], "convert it to PNG")):
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        try:
+            main(argv + ["-o", os.path.join(tmp, "bad.gif")])
+        except SystemExit as e:
+            assert e.code == 2, argv
+        else:
+            raise AssertionError(argv)
+    assert says in err.getvalue(), (argv, err.getvalue())
 print("ok")

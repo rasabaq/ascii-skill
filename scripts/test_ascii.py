@@ -6,6 +6,7 @@ import contextlib
 import io
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -116,7 +117,7 @@ assert tiles == convert(poster, width=20, aspect=1.0, mode="tiles", palette=4, s
 assert tiles != convert(poster, width=20, aspect=1.0, mode="tiles", palette=4, seed=8)
 fixed = [(255, 0, 0), (0, 0, 255)]
 assert {c[2] for row in convert(poster, width=20, mode="tiles", palette=fixed) for c in row if len(c) == 3} <= set(fixed)
-assert set(to_text(tiles)) <= {" ", "\n"} | {c[0] for row in tiles for c in row if len(c) == 3}, "text drops page glyphs"
+assert set(to_text(tiles, tiles=True)) <= {" ", "\n"} | {c[0] for row in tiles for c in row if len(c) == 3}, "text drops page glyphs"
 assert "\x1b[49m" in to_ansi(tiles), "background resets after a tile"
 # HTML: ramp at aspect 0.5 keeps the font's own advance; square tiles get centred, cell-wide glyph boxes.
 page = to_html(grid)
@@ -135,7 +136,38 @@ main([tmp, "--mode", "halfblock", "--sharpen", "-o", tmp + ".html"])
 assert os.path.getsize(tmp + ".png") > 0
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
 assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
-for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"]):
+# 1px stripes at their own width: shrinking rows must average them to gray, not pick only the black ones.
+stripes = Image.new("L", (100, 100))
+for y in range(0, 100, 2):
+    stripes.paste(255, (0, y, 100, y + 1))
+assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row} <= set("*+="), "mid-gray"
+
+# The tonal stretch keeps hues: a gray ground under a blue-black sky stays gray, not cyan.
+sky = Image.new("RGB", (40, 40), (20, 20, 30))
+sky.paste((200, 200, 200), (0, 20, 40, 40))
+r, g, b = convert(sky, width=4, mode="halfblock")[-1][0][2]
+assert r == g == b, (r, g, b)
+
+# Words with accent boxes: plain text keeps every word, boxed or not.
+duo = Image.new("RGB", (200, 200), (128, 128, 128))
+duo.paste((255, 0, 0), (0, 0, 100, 200))
+words = convert(duo, width=40, mode="words", accent="#ff0000")
+assert sum(ch not in " \n" for ch in to_text(words)) == sum(c[0] != " " for row in words for c in row)
+
+# A grid too big to render in RAM is refused, not allocated.
+try:
+    to_png([[("#", (1, 1, 1))] * 1000] * 1000, font_size=80, aspect=1.0)
+except ValueError:
+    pass
+else:
+    raise AssertionError("huge PNG must be refused")
+
+# Text goes out as UTF-8 even when stdout is an ascii pipe.
+out = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ascii.py"), tmp, "-c", "blocks", "-w", "10"],
+                     capture_output=True, env=dict(os.environ, PYTHONIOENCODING="ascii"))
+assert out.returncode == 0 and "█".encode() in out.stdout, out.stderr
+
+for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"], ["-c", ""]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main([tmp] + argv)  # each must fail with a clean usage error, not a traceback
