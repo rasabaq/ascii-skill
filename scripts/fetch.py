@@ -91,7 +91,7 @@ def score(c, query):
         return None  # still image, odd format, or too big
     words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2] or [query.lower()]
     title = c["title"].lower()
-    s = 3.0 * sum(w[:-1] in title for w in words) / len(words)  # w[:-1]: "horses" matches "horse"
+    s = 5.0 * sum(w[:-1] in title for w in words) / len(words)  # w[:-1]: "horses" matches "horse"; outweighs GIF vs video
     s += 2.0 if c["mime"] == "image/gif" else 1.0
     s += 1.0 if c["dur"] <= 30 else 0.3 if c["dur"] <= 90 else -1.0
     s -= 0.1 * c["size"] / 2**20  # smaller is faster and plenty for ASCII
@@ -120,11 +120,14 @@ def save(c, out):
         f.write(data)
     if ext == ".gif":
         from PIL import Image
-        with Image.open(out) as im:
-            frames = getattr(im, "n_frames", 1)
+        try:
+            with Image.open(out) as im:
+                frames = getattr(im, "n_frames", 1)
+        except OSError:  # corrupt or not really a GIF: the caller moves on to the next result
+            frames = 0
         if frames < 2:
             os.remove(out)
-            raise ValueError("%s is a still GIF" % c["title"])
+            raise ValueError("%s is a still or broken GIF" % c["title"])
     return out
 
 
@@ -153,7 +156,7 @@ def main(argv=None):
             for n, c in enumerate(ranked[:a.n], 1):
                 print(fmt_row(n, c))
             return 0
-        if a.pick:
+        if a.pick is not None:
             if not 1 <= a.pick <= len(ranked):
                 raise ValueError("--pick must be between 1 and %d" % len(ranked))
             todo = [ranked[a.pick - 1]]
@@ -162,7 +165,7 @@ def main(argv=None):
         for c in todo:
             try:
                 path = save(c, a.out)
-            except ValueError as e:  # still GIF or too big: try the next one
+            except ValueError as e:  # still, broken or too big: try the next one
                 print("note: skipped %s" % e, file=sys.stderr)
                 continue
             print(path)
