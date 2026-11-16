@@ -38,3 +38,14 @@ for name in EFFECTS:
     assert fr[-1] == hb, name
     assert any(len(c) == 3 for f in fr[:-1] for row in f for c in row), name  # not only the last frame
 print("ok halfblock")
+
+# Scan line and matrix heads stand out on the page: light on a dark page (the default), dark on a light one.
+ink = [[("#", (29, 53, 87)) for _ in range(30)] for _ in range(20)]
+lum = lambda c: sum(c) / 3
+for name, f in (("scan", 30), ("matrix", 25)):
+    dark, light = frames(ink, name, seed=1)[f], frames(ink, name, seed=1, bg=(243, 234, 216))[f]
+    assert frames(ink, name, seed=1, bg=(0, 0, 0))[f] == dark, name  # default is a black page
+    assert max(lum(c) for r in dark for _ch, c in r) > 150, name
+    assert name == "matrix" or max(lum(c) for r in light for _ch, c in r) <= lum((29, 53, 87))  # no pale glow
+    assert min(lum(c) for r in light for _ch, c in r) < 20, name
+print("ok light page")

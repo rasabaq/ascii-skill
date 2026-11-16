@@ -521,6 +521,8 @@ def main(argv=None):
                     out.write(text)
             else:
                 sys.stdout.write(text)
+        if a.output:
+            print(a.output)  # so scripts can tell it worked
     except Image.UnidentifiedImageError as e:
         hint = {".svg": " (SVG is not supported: convert it to PNG first, e.g. rsvg-convert)",
                 ".heic": " (HEIC needs: pip install pillow-heif)"}.get(os.path.splitext(a.image)[1].lower(), "")

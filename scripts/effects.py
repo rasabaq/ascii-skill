@@ -14,6 +14,7 @@ import random
 FPS = 25  # all default frame counts are timed for this rate
 GLYPHS = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ$#%&*+=<>?/\\|!:;~^"
 WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
 
 
 def mix(c, t, k):
@@ -21,12 +22,24 @@ def mix(c, t, k):
     return (round(c[0] + (t[0] - c[0]) * k), round(c[1] + (t[1] - c[1]) * k), round(c[2] + (t[2] - c[2]) * k))
 
 
-def _lit(c):
-    return c if max(c) > 60 else (150, 150, 150)  # dark cells get gray ink so rain over them shows
+def _dark(bg):
+    return sum(bg) < 384  # same split as ascii.convert()
+
+
+def _pop(bg):
+    """The color that stands out on the page: white on a dark page, black on a light one."""
+    return WHITE if _dark(bg) else BLACK
+
+
+def _lit(c, bg=BLACK):  # cells close to the page get gray ink, so rain over them shows
+    if _dark(bg):
+        return c if max(c) > 60 else (150, 150, 150)
+    return c if min(c) < 195 else (105, 105, 105)
 
 
 def matrix(grid, n=80, rng=None, bg=(0, 0, 0), trail=10, **_):
-    """Falling columns of glyphs with a bright head; the art is left behind the trail."""
+    """Falling columns of glyphs with a bright head; the art is left behind the trail.
+    On a light page (`bg`) the head is dark instead, so it still shows."""
     rows, cols = len(grid), len(grid[0])
     active = max(1, round(n * 0.8))  # last 20% holds the clean art
     drops = []
@@ -46,11 +59,11 @@ def matrix(grid, n=80, rng=None, bg=(0, 0, 0), trail=10, **_):
                 ch, c = grid[y][x]
                 d = hy - y
                 if d == 0:
-                    frame[y][x] = (rng.choice(GLYPHS), mix(_lit(c), WHITE, 0.75))
+                    frame[y][x] = (rng.choice(GLYPHS), mix(_lit(c, bg), _pop(bg), 0.75))
                 elif ch != " " and rng.random() < d / trail:  # the art shows through, more so up the trail
                     frame[y][x] = (ch, mix(c, bg, 0.5 * (1 - d / trail)))
                 else:
-                    frame[y][x] = (rng.choice(GLYPHS), mix(_lit(c), bg, 0.15 + 0.75 * d / trail))
+                    frame[y][x] = (rng.choice(GLYPHS), mix(_lit(c, bg), bg, 0.15 + 0.75 * d / trail))
             for y in range(0, min(rows, hy - trail + 1)):
                 frame[y][x] = grid[y][x]
         out.append(frame)
@@ -85,9 +98,10 @@ def decode(grid, n=60, rng=None, **_):
     return out
 
 
-def scan(grid, n=60, rng=None, glow=4, **_):
-    """A bright CRT line sweeps down and types each row in, leaving a short glow."""
-    rows, cols = len(grid), len(grid[0])
+def scan(grid, n=60, rng=None, glow=4, bg=BLACK, **_):
+    """A bright CRT line sweeps down and types each row in, leaving a short glow.
+    On a light page (`bg`) the line and glow are dark instead, so they still show."""
+    rows, cols, hi = len(grid), len(grid[0]), _pop(bg)
     active = max(1, round(n * 0.85))
     out = []
     for f in range(n):
@@ -99,13 +113,13 @@ def scan(grid, n=60, rng=None, glow=4, **_):
             if d < 0 or (d == 0 and f >= active):
                 frame.append([(" ", c) for _ch, c in row] if d < 0 else list(row))
             elif d == 0:
-                line = [(ch, mix(c, WHITE, 0.85)) if x < typed else (" ", c) for x, (ch, c) in enumerate(row)]
+                line = [(ch, mix(c, hi, 0.85)) if x < typed else (" ", c) for x, (ch, c) in enumerate(row)]
                 if typed < cols:
-                    line[typed] = ("█", WHITE)
+                    line[typed] = ("█", hi)
                 frame.append(line)
             elif d <= glow:
                 k = 0.7 * (1 - d / (glow + 1))
-                frame.append([(ch, mix(c, WHITE, k)) for ch, c in row])
+                frame.append([(ch, mix(c, hi, k)) for ch, c in row])
             else:
                 frame.append(list(row))
         out.append(frame)

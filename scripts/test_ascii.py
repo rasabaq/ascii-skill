@@ -130,7 +130,9 @@ assert sq.size == (480, 480) and sq.getpixel((240, 250)) == (0, 0, 0) and sq.get
 assert len(convert(Image.new("L", (3, 2000)), width=40)) <= 1000
 tmp = os.path.join(tempfile.mkdtemp(), "in.png")
 img.save(tmp)
-main([tmp, "-o", tmp + ".png"])  # happy path writes a file
+with contextlib.redirect_stdout(io.StringIO()) as said:
+    main([tmp, "-o", tmp + ".png"])  # happy path writes a file
+assert said.getvalue() == tmp + ".png\n", "prints the output path"
 main([tmp, "--mode", "halfblock", "--sharpen", "-o", tmp + ".html"])
 assert os.path.getsize(tmp + ".png") > 0
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
