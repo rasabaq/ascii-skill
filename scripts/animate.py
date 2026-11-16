@@ -327,19 +327,19 @@ def main(argv=None):
     p.add_argument("-o", "--output", help="write .gif, .webp, .mp4 or .html; default plays in the terminal")
     p.add_argument("-w", "--width", type=int, help="columns (default 100; terminal: fit the window)")
     p.add_argument("-c", "--charset", help="%s, or your own ramp (default standard; tiles: random glyphs)" % ", ".join(CHARSETS))
-    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles: 1 for files)")
+    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles, led, dots: 1 for files)")
     p.add_argument("--contrast", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--brightness", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--invert", action="store_true", help="swap light and dark")
     p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering (crawls between frames)")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (WebP/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color" % ", ".join(COLORS))
-    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4/HTML (default 12; tiles: 80)")
+    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4/HTML (default 12; tiles: 80; led: 26; dots: 20)")
     p.add_argument("--fps", type=float, help="resample to this frame rate (default: keep source timing)")
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
-    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
+    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led or dots")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
@@ -434,7 +434,7 @@ def main(argv=None):
         if a.effect:
             if len(grids) > 1:
                 raise ValueError("--effect needs a still image, not an animation")
-            if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
+            if fg and a.mode not in ("led", "dots"):  # bake the ink in, so bright heads still show (led/dots: they do)
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
             grids = effects.frames(grids[0], a.effect)
             durs = [1000 / effects.FPS] * (len(grids) - 1) + [HOLD_MS]
@@ -444,7 +444,7 @@ def main(argv=None):
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap) for g in grids]
+            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.mode) for g in grids]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps)
             else:
