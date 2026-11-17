@@ -1,6 +1,6 @@
 ---
 name: ascii-art
-description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes an ASCII animation from a short description such as "a running horse", using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
+description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes ASCII art or animation from a short description with no image at all, such as "seaweed" or "a running horse", by drawing it in code or using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
 ---
 
 # ASCII art
@@ -163,7 +163,13 @@ uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the w
 
 ### From a description
 
-When the user describes a moving thing ("a running horse") instead of giving a file, find a free clip first. `scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
+When the user describes a thing ("seaweed", "a running horse") instead of giving a file, pick one path:
+
+- A built-in scene matches: use it (see "Scenes").
+- A simple or stylized subject (seaweed, a jellyfish, a campfire, a clock, a planet, falling leaves): draw it yourself (see "Draw it yourself"). Shapes and motion are yours to choose, and nothing needs credit.
+- Real motion that is hard to draw (a galloping horse, a dancer): fetch a clip, as below. If no clip fits, draw it.
+
+`scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
 
 1. Fetch a clip: `uv run scripts/fetch.py "running horse" -o /tmp/clip`. It adds the right extension (`.gif`, `.webm`), then prints the saved path and an attribution line. To choose yourself, run with `--list` first, then `--pick N`.
 2. Convert the printed path: `uv run scripts/animate.py /tmp/clip.gif --mode braille -w 80 --bg white -o out.gif`. Any preset works. For long videos add `--duration 5`.
@@ -172,7 +178,45 @@ When the user describes a moving thing ("a running horse") instead of giving a f
 
 Search with short plain English words for the subject and the motion. Line drawings, silhouettes and clips on a plain background read best as ASCII. Busy real-world video often does not.
 
-If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (see "Scenes").
+If nothing suitable is found, draw it yourself (below).
+
+### Draw it yourself
+
+Write a scene file and pass its path to `--scene`. It works like a built-in scene, so every mode, color and output works.
+
+```python
+# /tmp/seaweed.py
+import math, random
+from PIL import Image, ImageDraw
+from scenes import SS, TAU, _shrink, scene
+
+@scene(320, 240, 75, 25)                  # canvas width, height, frames per loop, fps
+def seaweed(w, h, n, seed):
+    rng = random.Random(seed)             # all randomness from the seed, picked once before the loop
+    strands = [(rng.uniform(0.05, 0.95) * w * SS, rng.random()) for _ in range(8)]
+    out = []
+    for k in range(n):
+        t = k / n                         # 0 to 1 over one loop
+        im = Image.new("RGB", (w * SS, h * SS))
+        draw = ImageDraw.Draw(im)
+        for x0, phase in strands:
+            pts = [(x0 + math.sin(TAU * (t - 0.7 * s + phase)) * 0.09 * w * SS * s, (1 - 0.8 * s) * h * SS)
+                   for s in (i / 30 for i in range(31))]
+            draw.line(pts, fill=(120, 240, 90), width=8 * SS)
+        out.append(_shrink(im, w, h))     # draw at SS x size, shrink for smooth edges
+    return out
+```
+
+```bash
+uv run scripts/animate.py --scene /tmp/seaweed.py -w 80 -o seaweed.gif
+```
+
+- Make it loop. Drive every motion with `t`: `sin(TAU * t)`, or `(p0 + speed * t) % 1` with a whole-number `speed` for things that wrap, like bubbles or rain. Frame `n` must equal frame `0`.
+- Draw bright on black. Dim colors turn into sparse, faint glyphs. Fill shapes and use thick lines, because thin detail is lost at 80 columns.
+- Look at a frame of the result and fix what reads poorly, then run again. Most subjects need one or two rounds.
+- Copy patterns from `scripts/scenes.py`: 3D shading (`donut`, `cube`), particles (`fire`, `rain`), and a walking figure (`walker`).
+- Two finished scene files show the level of detail to aim for: `examples/seaweed.py` (kelp and bubbles) and `examples/koi.py` (koi with patterns, fins, eyes and shading, swimming slow 8-second loops). Run either one with `--scene examples/koi.py`. Copy one as a starting point for a similar subject.
+- For a still picture, save one frame and convert it: `uv run --with pillow python -c "import sys; sys.path.insert(0, 'scripts'); from scenes import load, SCENES; SCENES[load('/tmp/seaweed.py')](320, 240, 1, 0)[0].save('/tmp/still.png')"`, then `scripts/ascii.py /tmp/still.png`.
 
 ## Python use
 
