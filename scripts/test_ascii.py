@@ -6,13 +6,14 @@ import contextlib
 import io
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ascii import convert, main, to_ansi, to_html, to_png, to_text  # noqa: E402
+from ascii import CHARSETS, PHOTO_INK, STYLES, convert, main, to_ansi, to_html, to_png, to_text, underlay  # noqa: E402
 
 # Left half black, right half white.
 img = Image.new("RGB", (40, 20), "black")
@@ -116,7 +117,7 @@ assert tiles == convert(poster, width=20, aspect=1.0, mode="tiles", palette=4, s
 assert tiles != convert(poster, width=20, aspect=1.0, mode="tiles", palette=4, seed=8)
 fixed = [(255, 0, 0), (0, 0, 255)]
 assert {c[2] for row in convert(poster, width=20, mode="tiles", palette=fixed) for c in row if len(c) == 3} <= set(fixed)
-assert set(to_text(tiles)) <= {" ", "\n"} | {c[0] for row in tiles for c in row if len(c) == 3}, "text drops page glyphs"
+assert set(to_text(tiles, tiles=True)) <= {" ", "\n"} | {c[0] for row in tiles for c in row if len(c) == 3}, "text drops page glyphs"
 assert "\x1b[49m" in to_ansi(tiles), "background resets after a tile"
 # HTML: ramp at aspect 0.5 keeps the font's own advance; square tiles get centred, cell-wide glyph boxes.
 page = to_html(grid)
@@ -147,17 +148,22 @@ assert [c[1] for c in half[0]] == [c[1] for c in flat[0][:8]] and [c[2] for c in
 ramp = Image.linear_gradient("L").rotate(90).resize((200, 100))
 left = ramp.copy()
 left.paste(255, (0, 0, 60, 100))
+import ascii  # noqa: E402
+local, ascii.LOCAL = ascii.LOCAL, 0  # local contrast also reaches a few columns over: test the dither alone
 a, b = (convert(im, 40, "minimal", dither="bayer", autocontrast=False) for im in (ramp, left))
 assert [r[16:] for r in a] == [r[16:] for r in b] and a != b
 c, d = (convert(im, 40, "minimal", dither=True, autocontrast=False) for im in (ramp, left))
 assert [r[16:] for r in c] != [r[16:] for r in d]
+ascii.LOCAL = local
 assert len(set(to_text(convert(gray, width=40, charset="minimal", dither="bayer")))) > 2, "bayer spreads levels too"
 
 # Size caps: huge widths are refused, tall strips are capped.
 assert len(convert(Image.new("L", (3, 2000)), width=40)) <= 1000
 tmp = os.path.join(tempfile.mkdtemp(), "in.png")
 img.save(tmp)
-main([tmp, "-o", tmp + ".png"])  # happy path writes a file
+with contextlib.redirect_stdout(io.StringIO()) as said:
+    main([tmp, "-o", tmp + ".png"])  # happy path writes a file
+assert said.getvalue() == tmp + ".png\n", "prints the output path"
 main([tmp, "--mode", "halfblock", "--sharpen", "-o", tmp + ".html"])
 assert os.path.getsize(tmp + ".png") > 0
 main([tmp, "--dither", "-o", tmp + ".fs.txt"])  # plain --dither is still Floyd-Steinberg
@@ -169,8 +175,45 @@ main([tmp, "--colors", "gameboy", "-o", tmp + ".gb.png"])
 assert Image.open(tmp + ".gb.png").getpixel((0, 0)) == RETRO["gameboy"][0], "the page is the darkest green"
 main([tmp, "--mode", "tiles", "-w", "4", "-o", tmp + ".tiles.png"])  # tiles defaults: square 48 px cells
 assert Image.open(tmp + ".tiles.png").size == (4 * 48, 2 * 48)
-for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"],
-             ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"], ["--backdrop", "1.5"]):
+# 1px stripes at their own width: shrinking rows must average them to gray, not pick only the black ones.
+stripes = Image.new("L", (100, 100))
+for y in range(0, 100, 2):
+    stripes.paste(255, (0, y, 100, y + 1))
+assert {c[0] for row in convert(stripes, width=100, autocontrast=False) for c in row}.isdisjoint(" @#"), "mid-gray"
+
+# The tonal stretch keeps hues: a gray ground under a blue-black sky stays gray, not cyan.
+sky = Image.new("RGB", (40, 40), (20, 20, 30))
+sky.paste((200, 200, 200), (0, 20, 40, 40))
+r, g, b = convert(sky, width=4, mode="halfblock")[-1][0][2]
+assert r == g == b, (r, g, b)
+
+# Words with accent boxes: plain text keeps every word, boxed or not.
+duo = Image.new("RGB", (200, 200), (128, 128, 128))
+duo.paste((255, 0, 0), (0, 0, 100, 200))
+words = convert(duo, width=40, mode="words", accent="#ff0000")
+assert sum(ch not in " \n" for ch in to_text(words)) == sum(c[0] != " " for row in words for c in row)
+
+# Glow: light bleeds into the empty cell next to a glyph; HTML gets the same as a text-shadow.
+lone = [[("#", (0, 255, 0)), (" ", (0, 0, 0))]]
+assert to_png(lone, glow=0.8).getpixel((10, 12))[1] > to_png(lone).getpixel((10, 12))[1] == 0
+assert "text-shadow:0 0 6.7px" in to_html(lone, glow=0.8) and "text-shadow" not in to_html(lone)
+
+# A grid too big to render in RAM is refused, not allocated.
+try:
+    to_png([[("#", (1, 1, 1))] * 1000] * 1000, font_size=80, aspect=1.0)
+except ValueError:
+    pass
+else:
+    raise AssertionError("huge PNG must be refused")
+
+# Text goes out as UTF-8 even when stdout is an ascii pipe.
+out = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ascii.py"), tmp, "-c", "blocks", "-w", "10"],
+                     capture_output=True, env=dict(os.environ, PYTHONIOENCODING="ascii"))
+assert out.returncode == 0 and "█".encode() in out.stdout, out.stderr
+
+for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"], ["-c", ""],
+             ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"], ["--backdrop", "1.5"],
+             ["--under", "2", "-o", tmp + ".png"], ["--under", "0.5"]):  # --under is 0-1 and needs a picture
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main([tmp] + argv)  # each must fail with a clean usage error, not a traceback
@@ -194,4 +237,53 @@ assert all(len(c) == 3 and c[2] == (100, 20, 20) for c in cells), cells[0]
 cells = [c for row in convert(red, 4, backdrop=0.5, autocontrast=False, bg="white") for c in row]
 assert all(c[2] == (228, 148, 148) for c in cells), cells[0]
 assert all(len(c) == 2 for row in convert(red, 4, autocontrast=False) for c in row), "off by default"
+
+# Style ramps: the brightest cell gets the heaviest glyph, a dark cell gets none.
+for name in STYLES:
+    row = convert(img, width=10, charset=name)[0]
+    assert row[0][0] == " " and row[-1][0] == CHARSETS[name][0] != " ", (name, row)
+# Over the photo each ink keeps its pixel's color, a little brighter; on a flat page it is pushed up to read.
+dim = Image.new("RGB", (40, 20), (100, 20, 20))
+assert convert(dim, 4, autocontrast=False)[0][0][1][0] >= 200
+assert convert(dim, 4, autocontrast=False, over_photo=True)[0][0][1] == tuple(round(v * PHOTO_INK) for v in (100, 20, 20))
+assert convert(dim, 4, autocontrast=False, over_photo=True, bg="white")[0][0][1][0] < 100, "darker on a light page"
+# The underlay is the photo itself, only dimmed toward the page: the hard edge in `img` stays hard.
+soft = underlay(img, "black", 0.5)
+assert soft.size == img.size and soft.getpixel((2, 10)) == (0, 0, 0) and 120 <= soft.getpixel((38, 10))[0] <= 128
+assert underlay(img, "black", 1).tobytes() == img.convert("RGB").tobytes(), "strength 1 is the photo, untouched"
+assert underlay(img.convert("RGBA"), "white", 0).getpixel((2, 10)) == (255, 255, 255), "strength 0 is the page"
+# to_png and to_html draw it behind the glyphs instead of the flat page.
+blank = [[(" ", (0, 0, 0))] * 4] * 2
+assert to_png(blank, under=Image.new("RGB", (8, 8), (9, 99, 199))).getpixel((3, 3)) == (9, 99, 199)
+page = to_html(blank, under=Image.new("RGB", (8, 8), (9, 99, 199)))
+assert "data:image/jpeg;base64," in page and "display:inline-block" in page and "base64" not in to_html(blank)
+# A symbol fills its square cell (24 px here), centred by its ink, so diamonds touch. Other glyphs shrink to fit.
+lone = lambda ch: to_png([[(" ", (0, 0, 0))] * 3, [(" ", (0, 0, 0)), (ch, (255, 255, 255)), (" ", (0, 0, 0))],
+                          [(" ", (0, 0, 0))] * 3], font_size=40, aspect=1.0).getbbox()
+left, top, right, bottom = lone("◆")
+assert right - left >= 22 and bottom - top >= 22 and abs(left + right - 72) <= 2 and abs(top + bottom - 72) <= 2, lone("◆")
+assert lone("#")[2] - lone("#")[0] < 16, lone("#")
+page = to_html([[("◆", (1, 2, 3))]], font_size=20, aspect=1.0)
+assert "font:20px/0.600 " in page and "<i>◆</i>" in page
+# Halfblock with a gap: a mosaic. Each pixel becomes its own tile with the page around it.
+mosaic = to_png([[cell]], gap=1)
+assert mosaic.getpixel((0, 0)) == (0, 0, 0) and mosaic.getpixel((1, 1)) == (255, 0, 0) and mosaic.getpixel((1, 8)) == (0, 0, 255)
+assert mosaic.getpixel((3, 6)) == (0, 0, 0), "the gap also parts the two pixels of a cell"
+# --style fills -c, and for a picture the cell shape, size, columns and the photo under the glyphs.
+main([tmp, "--style", "diamond", "-o", tmp + ".style.png"])
+styled = Image.open(tmp + ".style.png")
+assert styled.size == (120 * 10, 60 * 10) and styled.getpixel((2, 300)) == (0, 0, 0)
+assert 221 <= styled.getpixel((1199, 0))[0] <= 237, "between the glyphs the photo shows at 0.9"
+main([tmp, "--style", "diamond", "-w", "30", "--under", "0", "-o", tmp + ".style.png"])  # your own options win
+styled = Image.open(tmp + ".style.png")
+assert styled.size == (30 * 10, 15 * 10) and styled.getpixel((299, 0)) == (0, 0, 0)
+with contextlib.redirect_stdout(io.StringIO()) as said:
+    main([tmp, "--style", "diamond"])  # text: just the ramp, at the usual 100 columns
+assert said.getvalue().splitlines()[0] == " " * 50 + "◆" * 50, said.getvalue().splitlines()[0]
+
+pink = Image.new("RGB", (40, 40), (3, 6, 4))  # near-black page with a faint green tint
+ImageDraw.Draw(pink).ellipse((8, 8, 32, 32), fill=(230, 90, 160))
+inks = [rgb for row in convert(pink, 20) for ch, rgb in row if ch.strip()]
+assert any(r > g + 60 for r, g, b in inks), "a pink subject stays pink: one contrast curve for R, G and B"
+assert all(abs(r - g) < 40 or r > g for r, g, b in inks), "the dark page's faint tint does not become bright green"
 print("ok")

@@ -2,21 +2,31 @@
 # dependencies = ["pillow>=10.1"]
 # ///
 """Offline checks for fetch.py (no network). Run: uv run scripts/test_fetch.py"""
+import contextlib
+import io
 import os
 import sys
+import tempfile
+
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
+import fetch  # noqa: E402
 from fetch import attribution, candidate, is_free, rank  # noqa: E402
 
 MB = 2**20
 
 
-def page(title, mime, size, dur=0, lic="CC BY-SA 4.0", index=1, derivatives=()):
+def raw(title, mime, size, dur=0, lic="CC BY-SA 4.0", index=1, derivatives=()):
     ext = {"LicenseShortName": {"value": lic}, "Artist": {"value": '<a href="//commons.wikimedia.org/wiki/User:Jo">Jo &amp; Al</a> (cropped by <i>Bo</i> )'}}
     info = {"mime": mime, "size": size, "duration": dur, "url": "https://upload.example/" + title,
             "descriptionurl": "https://commons.wikimedia.org/wiki/File:" + title, "extmetadata": ext,
             "derivatives": list(derivatives)}
-    return candidate({"title": "File:" + title, "index": index, "videoinfo": [info]})
+    return {"title": "File:" + title, "index": index, "videoinfo": [info]}
+
+
+def page(*args, **kw):
+    return candidate(raw(*args, **kw))
 
 
 # Licenses: free ones pass, NC/ND and unknown ones do not.
@@ -55,4 +65,23 @@ assert v["url"].endswith("480p.vp9.webm") and v["size"] == 2_000_000, v
 # Attribution: plain text from the HTML extmetadata, one line.
 assert attribution(gif) == ('"Running horse.gif" by Jo & Al (cropped by Bo), CC BY-SA 4.0, '
                             "https://commons.wikimedia.org/wiki/File:Running horse.gif"), attribution(gif)
+# A clip with the subject in its title beats an unrelated GIF, even a smaller one.
+herd = page("Dominance hierarchy in a herd of horses.webm", "video/webm", 6 * MB, dur=36, index=5)
+railway = page("Railway map of France - animated.gif", "image/gif", MB, dur=78, index=4)
+assert rank([railway, herd], "running horse")[0] is herd
+
+# Download: a broken GIF is skipped and removed, and the next result is used; --pick 0 is an error.
+good = Image.new("L", (4, 4))
+buf = io.BytesIO()
+good.save(buf, "GIF", save_all=True, append_images=[Image.new("L", (4, 4), 255)])
+files = {"https://upload.example/Broken horse.gif": b"GIF89a not really", "https://upload.example/Good horse.gif": buf.getvalue()}
+fetch.search = lambda q: [raw("Broken horse.gif", "image/gif", MB, dur=1, index=1), raw("Good horse.gif", "image/gif", MB, dur=1, index=2)]
+fetch.get = lambda url, limit=None: files[url]
+out = tempfile.mkdtemp()
+with contextlib.redirect_stdout(io.StringIO()) as said, contextlib.redirect_stderr(io.StringIO()):
+    assert fetch.main(["horse", "-o", out]) == 0
+assert os.listdir(out) == ["Good_horse.gif"] and "Good_horse.gif" in said.getvalue(), (os.listdir(out), said.getvalue())
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+    assert fetch.main(["horse", "--pick", "0", "-o", out]) != 0
+assert "--pick must be between" in err.getvalue(), err.getvalue()
 print("ok")

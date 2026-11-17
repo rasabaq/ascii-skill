@@ -3,14 +3,15 @@
 A free, open-source agent skill that turns images, GIFs and video into ASCII art and ASCII animation. Inspired by [ASCII Magic](https://www.ascii-magic.com/).
 
 - **Eight modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster), `tiles` (a square-tile poster), `led` (an LED board with glowing lamps) and `dots` (a halftone print). The last two still give round-glyph text
+- **Photo styles:** `--style characters`, `lines`, `diagonal`, `diamond`, `dot` or `cross` draws small glowing glyphs over the original photo, so the picture stays easy to see. `--mode halfblock --gap 1` makes a mosaic
 - **Moving ASCII:** GIF, WebP, APNG or any video in; GIF, WebP, MP4, an HTML player or terminal playback out. `--subject` keeps only what moves (still camera), and still areas do not flicker
 - **From a description:** `fetch.py "running horse"` finds a freely licensed clip on Wikimedia Commons and prints its attribution
-- **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `city`, `tree`, `planet`, `gears`, all looping
-- **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`
+- **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `flower`, `city`, `tree`, `planet`, `gears`, all looping
+- **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`, `shimmer` (with `--under` for the photo behind the glyphs), `dust`
 - **Post effects:** `--post crt,bloom,chroma,scan,vignette,grain` for PNG, GIF, WebP and MP4, steady from frame to frame
 - **Looks in one word:** `--look matrix|vaporwave|terminal|noir|vhs|c64|pico8|gameboy|scoreboard|newspaper`; your own flags still win
 - **Outputs:** plain text, truecolor terminal, HTML, PNG, JPG, WebP, GIF, MP4
-- **Styling:** 7 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), black, white or transparent background, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
+- **Styling:** 13 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), black, white or transparent background, glow, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
 
 Python 3.9+ and Pillow. ffmpeg only for video.
 
@@ -30,6 +31,7 @@ Then ask your agent something like "make ASCII art of cat.jpg" or "turn this GIF
 uv run scripts/ascii.py cat.jpg                                  # text in the terminal
 uv run scripts/ascii.py cat.jpg --mode halfblock --color         # best color photo in a terminal
 uv run scripts/ascii.py cat.jpg --mode braille --dither -o x.png # fine dot drawing
+uv run scripts/ascii.py cat.jpg --style diamond -o x.png         # diamonds glowing over the photo
 uv run scripts/ascii.py cat.jpg --mode tiles -w 32 -o poster.png
 uv run scripts/ascii.py cat.jpg --mode words --accent "#f28c28" -o poster.png
 uv run scripts/ascii.py cat.jpg --mode dots --bg white -o print.png
@@ -54,7 +56,7 @@ uv run scripts/test_scenes.py
 uv run scripts/test_fetch.py
 uv run scripts/test_post.py
 uv run scripts/test_modes.py
-uv run --with pillow python scripts/test_effects.py
+uv run scripts/test_effects.py
 ```
 
 ## License
