@@ -12,7 +12,7 @@ from PIL import Image, ImageChops, ImageSequence, ImageStat
 
 sys.path.insert(0, os.path.dirname(__file__))
 from animate import main  # noqa: E402
-from scenes import DEFAULTS, SCENES, frames  # noqa: E402
+from scenes import DEFAULTS, SCENES, frames, load  # noqa: E402
 
 
 def diff(a, b):
@@ -73,4 +73,13 @@ for argv in (["--scene", "nope"], [], ["x.gif", "--scene", "cube"], ["--scene", 
         assert e.code == 2, argv
     else:
         raise AssertionError(argv)
+# Every example scene file loads, draws, and loops like a built-in scene.
+examples = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples")
+for f in sorted(os.listdir(examples)):
+    if f.endswith(".py"):
+        name = load(os.path.join(examples, f))
+        seq = SCENES[name](160, 120, 12, 0)
+        steps = [diff(a, b) for a, b in zip(seq, seq[1:])]
+        assert len(seq) == 12 and min(steps) > 0.05, (f, "every frame moves")
+        assert diff(seq[-1], seq[0]) <= 1.5 * max(steps), (f, "loops")
 print("ok")

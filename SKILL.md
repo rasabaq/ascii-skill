@@ -215,6 +215,7 @@ uv run scripts/animate.py --scene /tmp/seaweed.py -w 80 -o seaweed.gif
 - Draw bright on black. Dim colors turn into sparse, faint glyphs. Fill shapes and use thick lines, because thin detail is lost at 80 columns.
 - Look at a frame of the result and fix what reads poorly, then run again. Most subjects need one or two rounds.
 - Copy patterns from `scripts/scenes.py`: 3D shading (`donut`, `cube`), particles (`fire`, `rain`), and a walking figure (`walker`).
+- Two finished scene files show the level of detail to aim for: `examples/seaweed.py` (kelp and bubbles) and `examples/koi.py` (koi with patterns, fins, eyes and shading, swimming slow 8-second loops). Run either one with `--scene examples/koi.py`. Copy one as a starting point for a similar subject.
 - For a still picture, save one frame and convert it: `uv run --with pillow python -c "import sys; sys.path.insert(0, 'scripts'); from scenes import load, SCENES; SCENES[load('/tmp/seaweed.py')](320, 240, 1, 0)[0].save('/tmp/still.png')"`, then `scripts/ascii.py /tmp/still.png`.
 
 ## Python use
