@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageSequence
 
 sys.path.insert(0, os.path.dirname(__file__))
 from animate import (MARK2, background, html_frame, main, shared_lut, snap, steady, subject_masks,  # noqa: E402
-                     timeline, to_html_player, video_frames)
+                     timeline, to_html_player, to_mp4, video_frames)
 from ascii import convert  # noqa: E402
 
 # A 3-frame GIF: a white box moving over a dim gradient, with uneven delays.
@@ -36,10 +36,32 @@ out = Image.open(os.path.join(tmp, "out.gif"))
 assert [f.info["duration"] for f in ImageSequence.Iterator(out)] == [100, 200, 300]
 assert out.info["loop"] == 0, "loops forever"
 
+
+
+def shown_frames(page):
+    """The player's data, as the text of each frame it shows, and the frame times."""
+    L, F, I, D = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", page).group(1))
+    return ["\n".join(L[n] for n in F[i]) for i in I], D
+
+
 main([src, "-o", os.path.join(tmp, "out.html"), "-w", "20"])
 page = open(os.path.join(tmp, "out.html"), encoding="utf-8").read()
-F, I, D = json.loads(re.search(r"const \[F, I, D\] = (.*), a =", page).group(1))
-assert len(I) == 3 and D == [100, 200, 300], (I, D)
+shown, D = shown_frames(page)
+assert len(shown) == 3 and D == [100, 200, 300], D
+
+# Embeddable: the art fills its container, nothing is fixed to the page, reduced motion shows a still,
+# and every rule is scoped to the player's own block.
+assert "100cqw" in page and "position:fixed" not in page and "prefers-reduced-motion" in page
+uid = re.search(r'<div id="(ascii-[0-9a-f]{8})">', page).group(1)
+css = re.search(r"<div id[^>]*><style>(.*?)</style>", page, re.S).group(1)
+assert all(rule.strip().startswith("#" + uid) for rule in re.split(r"}", css) if rule.strip()), css
+# A frame that moves in a few rows stores the other rows once.
+rows = [[(c, (200, 200, 200)) for c in "ab"]] * 30
+moved = [rows[:5] + [[("x", (0, 0, 0))] * 2] + rows[6:], rows]
+big = to_html_player(moved, [100, 100], "black", None, 12, 0.5)
+L = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", big).group(1))[0]
+assert len(L) == 2, L
+assert shown_frames(big)[0] == [html_frame(g, None) for g in moved]
 
 # --fps resamples, --start/--duration cut, the cap truncates.
 ten = [(None, 100)] * 10
@@ -83,12 +105,49 @@ main([still, "--effect", "decode", "--mode", "halfblock", "-w", "10", "-o", os.p
 fx = Image.open(os.path.join(tmp, "fx.gif"))
 assert fx.n_frames > 10 and fx.info.get("loop") == 0
 
+# --under draws the photo behind the glyphs: with only spaces (-c "  "), the frame is the dimmed photo, not the page.
+under = os.path.join(tmp, "under.webp")
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--effect", "shimmer", "-w", "10", "-c", "  ", "--under", "0.5", "-o", under])
+r, g, b = Image.open(under).convert("RGB").getpixel((5, 5))
+assert 90 <= r <= 110 and 50 <= g <= 70 and b <= 30, (r, g, b)  # half of (200, 120, 40) over black
+for bad in (["--under", "2"], ["--under", "0.5", "-o", os.path.join(tmp, "u.html")]):
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            main([still, "-w", "10"] + bad + ([] if "-o" in bad else ["-o", under]))
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("bad --under must fail: %s" % bad)
+# --style works as in ascii.py: here square 10 px cells over the photo at 0.9. The HTML player has no photo.
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--style", "diamond", "-c", "  ", "-w", "10", "-o", under])
+    main([still, "--style", "diamond", "-w", "10", "-o", os.path.join(tmp, "style.html")])
+styled = Image.open(under).convert("RGB")
+r, g, b = styled.getpixel((5, 5))
+assert styled.size == (100, 80) and 170 <= r <= 190 and 98 <= g <= 118 and b <= 46, (styled.size, r, g, b)
+assert "◇" in open(os.path.join(tmp, "style.html"), encoding="utf-8").read()
+
+
+def player_durs(args):
+    path = os.path.join(tmp, "durs.html")
+    with contextlib.redirect_stdout(io.StringIO()) as said:
+        main(args + ["-o", path])
+    assert said.getvalue().startswith("wrote %s (" % path), said.getvalue()  # says where the file went
+    return json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", open(path, encoding="utf-8").read()).group(1))[3]
+
+
+# --hold: intros hold the art 1.5 s by default, loops (wave, glitch) and --hold 0 restart at once.
+assert player_durs([still, "--effect", "decode", "-w", "10"])[-1] == 1540
+assert set(player_durs([still, "--effect", "decode", "-w", "10", "--hold", "0"])) == {40}
+assert set(player_durs([still, "--effect", "wave", "-w", "10"])) == {40}
+assert player_durs([src, "-w", "10", "--hold", "2"]) == [100, 200, 2300]
+
 
 def player_rows(args, path):
     """Run main to an HTML player; return each shown frame as text rows without color marks."""
     main(args + ["-o", path])
-    F, I, D = json.loads(re.search(r"const \[F, I, D\] = (.*), a =", open(path, encoding="utf-8").read()).group(1))
-    return [re.sub("\ue000...", "", F[i]).split("\n") for i in I]
+    return [re.sub("\ue000...", "", f).split("\n") for f in shown_frames(open(path, encoding="utf-8").read())[0]]
 
 
 # Noisy still camera: grey wall with grain, and a white square that moves 6 px per frame.
@@ -132,6 +191,18 @@ if shutil.which("ffmpeg") and shutil.which("ffprobe"):
                     "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", vid], check=True)
     img, _ = next(video_frames(vid, Namespace(fps=None, start=0, duration=None), 480, 5))
     assert abs(img.width / img.height - 16 / 9) < 0.02, img.size
+    # MP4 is BT.709 and tagged, so browsers show the exact page color; odd sizes are cut, not padded with black.
+    mp4 = os.path.join(tmp, "page.mp4")
+    to_mp4([Image.new("RGB", (41, 31), (243, 234, 216))] * 2, [40, 40], mp4, None)
+    tags = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,color_space,color_primaries,"
+                           "color_transfer,color_range", "-of", "csv=p=0", mp4], capture_output=True, text=True).stdout
+    w, h, *color = tags.strip().split(",")
+    assert int(w) % 2 == 0 and int(h) % 2 == 0 and color == ["tv", "bt709", "bt709", "bt709"], tags
+    px = subprocess.run(["ffmpeg", "-v", "error", "-i", mp4, "-frames:v", "1", "-vf", "crop=2:2:iw-2:ih-2,"
+                         "scale=in_color_matrix=bt709:in_range=tv:flags=accurate_rnd,format=rgb24", "-f", "rawvideo",
+                         "-"], capture_output=True).stdout
+    assert all(abs(v - t) <= 2 for v, t in zip(px, (243, 234, 216) * 4)), list(px)  # corner, so the cut edge too
+
 # Bad option mixes stop with one clear line, never a traceback or a silent ignore.
 svg = os.path.join(tmp, "logo.svg")
 with open(svg, "w") as f:

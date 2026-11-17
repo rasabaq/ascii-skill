@@ -12,6 +12,7 @@
     uv run scripts/animate.py --scene donut -o donut.gif           # a looping animation drawn in code
 """
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -23,15 +24,14 @@ import time
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequence, ImageStat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, _glow_css, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
+from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, add_poster_args, convert,  # noqa: E402
+                   POSTER_BG, poster_defaults, rgb, stretch_lut, to_ansi, to_png, underlay, value_hist)
 import effects  # noqa: E402
 import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
-MARK2 = "\ue001"  # MARK2 + 12 hex = two-color (halfblock) cells: exact top and bottom color.
-MARK3 = "\ue002"  # MARK3 + 12 hex = glyph on its own background: exact ink and background color.
-HOLD_MS = 1500  # an effect holds the finished art this long before it loops
+MARK2 = ""  # MARK2 + 12 hex = two-color (halfblock) cells: exact top and bottom color.
+MARK3 = ""  # MARK3 + 12 hex = glyph on its own background: exact ink and background color.
 MAX_MOVING = 0.4  # --subject gives up when more than this share of the picture's edges changes: the camera moves
 MAX_BYTES = 3_000_000_000  # ponytail: GIF/WebP encoders keep every rendered frame in RAM; refuse past ~3 GB
 
@@ -51,7 +51,7 @@ def video_frames(path, a, px, cap):
         raise ValueError("cannot read %s as an image; video input needs ffmpeg and ffprobe" % path)
     probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                             "stream=avg_frame_rate", "-of", "csv=p=0", path], capture_output=True, text=True)
-    num, _, den = probe.stdout.strip().partition("/")
+    num, _, den = (probe.stdout.split() or [""])[0].partition("/")  # some MP4s list the rate twice (timecode track)
     if probe.returncode or not num:
         raise ValueError("cannot read %s: not an image or video" % path)
     try:
@@ -104,21 +104,8 @@ def timeline(frames, start_ms, length_ms, fps, cap):
 
 
 def shared_lut(images, cutoff=1):
-    """One autocontrast lookup table over all frames, so brightness never pumps. Like ImageOps.autocontrast with
-    preserve_tone: the range comes from brightness and all three channels share it, so hues do not shift."""
-    h = [sum(col) for col in zip(*(im.convert("L").histogram() for im in images))]
-    cut, acc, lo, hi = sum(h) * cutoff // 100, 0, 0, 255
-    for lo in range(256):
-        acc += h[lo]
-        if acc > cut:
-            break
-    acc = 0
-    for hi in range(255, -1, -1):
-        acc += h[hi]
-        if acc > cut:
-            break
-    scale = 255 / (hi - lo) if hi > lo else 1
-    return [min(255, max(0, int((v - lo) * scale))) if hi > lo else v for v in range(256)] * 3
+    """One autocontrast lookup table over all frames, so brightness never pumps (see ascii.stretch_lut)."""
+    return stretch_lut([sum(col) for col in zip(*(value_hist(im) for im in images))], cutoff)
 
 
 def background(images, cut, n=25):
@@ -219,36 +206,53 @@ def html_frame(grid, fg, boxed=False, tiles=False):
 
 
 def to_html_player(grids, durs, bg, fg, font_size, aspect, gap=0, glow=0):
-    """`glow` (0-1) adds a soft bloom around the glyphs. `gap` (px) parts the boxes of glyph-on-background cells from each other; (0, y) only parts stacked rows (words mode)."""
+    """A standalone page whose <div> block can also be pasted into any web page: the art fills the width of
+    its container, the CSS and JS touch only that block, and a reader who asks for reduced motion sees the
+    last frame, paused. `gap` (px at --font-size) parts the boxes of glyph-on-background cells from each
+    other; (0, y) only parts stacked rows (words mode). `glow` (0-1) adds a soft bloom around the glyphs."""
     cw = font_size * CELL_W
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     size = min(font_size, round(cw / aspect / 1.2))  # glyphs shrink to fit short cells, as in ascii.to_html
     boxed = size < font_size
-    uniq, idx = {}, []
-    for g in grids:  # identical frames are stored once
-        idx.append(uniq.setdefault(html_frame(g, fg, boxed, gx > 0), len(uniq)))
-    data = json.dumps([list(uniq), idx, [round(d) for d in durs]], ensure_ascii=False).replace("</", "<\\/")
+    lines, frames, idx = {}, {}, []
+    for g in grids:  # each distinct line and each distinct frame is stored once
+        f = tuple(lines.setdefault(t, len(lines)) for t in html_frame(g, fg, boxed, gx > 0).split("\n"))
+        idx.append(frames.setdefault(f, len(frames)))
+    data = json.dumps([list(lines), list(frames), idx, [round(d) for d in durs]],
+                      ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     back = "transparent" if bg == "none" else "#%02x%02x%02x" % rgb(bg)
     ink = "#%02x%02x%02x" % fg if fg else "inherit"  # without --fg every glyph has its own span color
     shadow = "#000" if bg == "none" else back
-    edge = ("i.t{box-shadow:inset 0 0 0 %dpx %s;border-radius:%dpx}" % (gx, shadow, gx + _corner(round(cw), gx)) if gx
-            else "i.t{box-shadow:inset 0 %dpx %s,inset 0 -%dpx %s}" % (gy, shadow, gy, shadow) if gy else "")
+    e = lambda px: "%.3fem" % (px / size)  # px at --font-size, as em, so gaps scale with the art
+    edge = ("#P i.t{box-shadow:inset 0 0 0 %s %s;border-radius:%s}" % (e(gx), shadow, e(gx + _corner(round(cw), gx))) if gx
+            else "#P i.t{box-shadow:inset 0 %s %s,inset 0 -%s %s}" % (e(gy), shadow, e(gy), shadow) if gy else "")
     box = ("%.3f" % (cw / size), "text-align:center;") if boxed else (CELL_W, "")
-    return """<!doctype html><meta charset="utf-8"><title>ASCII animation</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:%s;color:%s}i{font-style:normal}%s
-i.h{display:inline-block;vertical-align:top;height:%.3fem}b{display:inline-block;width:%sem;%sfont-weight:normal}
-pre{margin:0;padding:16px;width:%.1fpx;font:%dpx/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer%s}
-button{position:fixed;right:12px;bottom:12px;font:13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;
-border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}</style>
-<pre id="a" title="Click or press space to play or pause"></pre><button id="b">Pause</button>
-<script>
-const [F, I, D] = %s, a = document.getElementById("a"), b = document.getElementById("b");
+    row_em = len(grids[0][0]) * cw / size  # one row is this many em wide
+    uid = "ascii-" + hashlib.md5(data.encode()).hexdigest()[:8]  # every rule is scoped to this block
+    # all:revert drops the host page's pre/b/i/button styles; the rules after it win by order or specificity.
+    glow_css = ";text-shadow:0 0 %.3fem" % (0.7 * glow * font_size / size) if glow else ""  # as ascii._glow_css
+    css = ("""#P,#P *{all:revert}#P{position:relative;overflow:hidden;container-type:inline-size;background:%s;color:%s}#P i{font-style:normal}%s
+#P i.h{display:inline-block;vertical-align:top;height:%.3fem}#P b{display:inline-block;width:%sem;%sfont-weight:normal}
+#P pre{margin:0;font:calc(100cqw / %.3f)/%.3f Menlo,Consolas,'DejaVu Sans Mono',monospace;cursor:pointer%s}
+#P button{position:absolute;right:8px;bottom:8px;font:12px system-ui,sans-serif;padding:4px 10px;border-radius:6px;
+border:1px solid #8888;background:#222c;color:#eee;cursor:pointer}"""
+           % ((back, ink, edge, cw / aspect / size) + box + (row_em, cw / aspect / size, glow_css))).replace("#P", "#" + uid)
+    return """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASCII animation</title><style>body{margin:0;background:%s}</style>
+<!-- To put the animation on your own page, paste everything from here to the end. It fills the width of its parent. -->
+<div id="%s"><style>%s</style>
+<pre role="img" aria-label="ASCII animation" title="Click to play or pause"></pre><button type="button">Pause</button>
+<script>{
+const [L, F, I, D] = %s, box = document.currentScript.parentNode, a = box.querySelector("pre"), b = box.querySelector("button");
 let i = 0, t = null, due = 0;
+function show(k) {
+  a.innerHTML = F[I[k]].map(n => L[n]).join("\\n").replace(/\\n/g, "</i>\\n").replace(/[\\u2800-\\u28ff]/g, "<b>$&</b>")
+    .replace(/\\ue000(...)/g, '</i><i style="color:#$1">')
+    .replace(/\\ue001(......)(......)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
+    .replace(/\\ue002(......)(......)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
+}
 function step() {
-  a.innerHTML = F[I[i]].replace(/\\n/g, "</i>\\n").replace(/[\u2800-\u28ff]/g, "<b>$&</b>").replace(/\ue000(...)/g, '</i><i style="color:#$1">')
-    .replace(/\ue001(......)(......)/g, '</i><i class="h" style="background:linear-gradient(#$1 50%%,#$2 50%%)">')
-    .replace(/\ue002(......)(......)/g, '</i><i class="h t" style="color:#$1;background:#$2">');
-  due += D[i]; i = (i + 1) %% I.length;
+  show(i); due += D[i]; i = (i + 1) %% I.length;
   t = setTimeout(step, Math.max(0, due - performance.now()));
 }
 function toggle() {
@@ -256,11 +260,10 @@ function toggle() {
   else { b.textContent = "Pause"; due = performance.now(); step(); }
 }
 a.onclick = b.onclick = toggle;
-onkeydown = e => { if (e.key === " ") { e.preventDefault(); toggle(); } };
-due = performance.now(); step();
-</script>
-""" % ((back, ink, edge, cw / aspect / size) + box + (cw * len(grids[0][0]), size, cw / aspect / size,
-                                                    _glow_css(glow, font_size), data))
+if (matchMedia("(prefers-reduced-motion: reduce)").matches) { show(I.length - 1); b.textContent = "Play"; }
+else { due = performance.now(); step(); }
+}</script></div>
+""" % (back, uid, css, data)
 
 
 def snap(images, durs, unit, least):
@@ -277,16 +280,20 @@ def snap(images, durs, unit, least):
     return keep, [(b - a) * unit for a, b in zip(starts, starts[1:])]
 
 
-def to_mp4(images, durs, path, fps):
-    """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid."""
+def to_mp4(images, durs, path, fps, crf=23):
+    """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid.
+    Converted and tagged as BT.709, so browsers show the exact --bg color (untagged video shifts it).
+    An odd last pixel row or column is cut (4:2:0 needs even sizes): padding would add a black line."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise ValueError(".mp4 output needs ffmpeg")
     fps = fps or min(60, 1000 / min(durs))
     w, h = images[0].size
     proc = subprocess.Popen([ffmpeg, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "%dx%d" % (w, h),
-                             "-r", "%.6g" % fps, "-i", "-", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264",
-                             "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", path],
+                             "-r", "%.6g" % fps, "-i", "-", "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2,scale=out_color_matrix=bt709:"
+                             "out_range=tv:flags=accurate_rnd,format=yuv420p,setparams=color_primaries=bt709:"
+                             "color_trc=bt709:colorspace=bt709:range=tv", "-c:v", "libx264", "-tune", "animation",
+                             "-crf", "%g" % crf, "-movflags", "+faststart", path],
                             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     t = k = 0
     try:
@@ -339,15 +346,22 @@ def main(argv=None):
     p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering (crawls between frames)")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (WebP/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color" % ", ".join(COLORS))
-    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4/HTML (default 12; tiles: 80)")
+    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4 (default 12; tiles: 80); HTML fills its box's width")
     p.add_argument("--fps", type=float, help="resample to this frame rate (default: keep source timing)")
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
-    p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
+    p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image (dust also works on an animation or --scene): %s"
+                   % ", ".join(effects.EFFECTS))
     p.add_argument("--glow", type=float, default=0, help="soft bloom around the glyphs, 0-1 (try 0.8)")
+    p.add_argument("--hold", type=float, help="seconds the last frame stays before the loop restarts (default: 1.5 "
+                   "for matrix, decode and scan; 0 for everything else, a seamless loop)")
+    p.add_argument("--under", type=float, metavar="0-1", help="GIF/WebP/MP4: draw the original photo behind "
+                   "the glyphs; the number is how strong it shows (try 0.4). Pairs well with --effect shimmer")
+    p.add_argument("--crf", type=float, default=23, help="MP4 quality, 0-51: lower is sharper and bigger (default 23; "
+                   "with --font-size 16 or more, 28 still looks clean and is ~30%% smaller)")
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
     p.add_argument("--scene", metavar="NAME|FILE.py", help="draw a looping animation instead of reading input: "
@@ -372,13 +386,19 @@ def main(argv=None):
         p.error("unknown scene %r: give a .py scene file or one of: %s" % (a.scene, ", ".join(scenes.SCENES)))
     user_bg = a.bg
     ext = os.path.splitext(a.output or "")[1].lower()
-    poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
-    if a.font_size < 1 or not 0 <= a.glow <= 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) or a.subject_cut <= 0 \
-            or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE):
-        p.error("need --font-size >= 1, --glow 0-1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --subject-cut > 0, "
-                "-w 1-%d" % MAX_SIDE)
+    if a.under and ext not in (".gif", ".webp", ".mp4"):
+        p.error("--under needs .gif, .webp or .mp4 output")
+    poster_defaults(a, bool(ext))
+    if ext in (".html", ".htm"):
+        a.under = None  # a --style asks for the photo, but the HTML player cannot show it
+    if a.font_size < 1 or not 0 <= a.glow <= 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) \
+            or a.subject_cut <= 0 or (a.duration is not None and a.duration <= 0) \
+            or (a.width is not None and not 1 <= a.width <= MAX_SIDE) \
+            or (a.hold or 0) < 0 or not 0 <= a.crf <= 51 or not 0 <= (a.under or 0) <= 1:
+        p.error("need --font-size >= 1, --glow 0-1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, "
+                "--subject-cut > 0, --hold >= 0, --crf 0-51, --under 0-1, -w 1-%d" % MAX_SIDE)
     if a.scene and (a.start or a.duration):
         p.error("--start and --duration pick a slice of an input file; a --scene is one short loop")
     try:
@@ -386,7 +406,9 @@ def main(argv=None):
         back = rgb(bg)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image
         px = 2 * SUBPIXELS[a.mode][0] * (a.width or MAX_SIDE // 2)  # 2x the sampled pixels; convert() does the final resize
-        if a.scene:  # frames drawn in code (scenes.py); --seed varies fire, waves, stars and rain; --fps keeps the loop length
+        if a.under:  # the photo is drawn behind the glyphs, so keep it as sharp as the output
+            px = max(px, (a.width or 100) * round(a.font_size * CELL_W))
+        if a.scene:  # frames drawn in code (scenes.py); --seed varies them, --fps keeps the loop length
             src = timeline(scenes.frames(a.scene, a.seed, a.fps), 0, 0, None, a.max_frames)
         else:
             try:
@@ -414,6 +436,7 @@ def main(argv=None):
         if footage and a.steady and len(images) > 1:
             images = steady(images, a.steady)
         lut = shared_lut(images) if footage else list(range(256)) * 3
+        photos = images  # for --under: the frames as they are, before the tonal stretch
         images = [im.point(lut) for im in images]
         if footage and a.subject and len(images) > 1:
             still = background(images, a.subject_cut)
@@ -431,7 +454,7 @@ def main(argv=None):
                     a.bg = bg = "white" if ImageStat.Stat(still.convert("L")).mean[0] > 128 else "black"
                     back = rgb(bg)
                 fill = Image.new("RGB", still.size, tuple(255 - v for v in back) if a.invert else back)
-                images = [Image.composite(im, fill, m) for im, m in zip(images, masks)]
+                images = photos = [Image.composite(im, fill, m) for im, m in zip(images, masks)]
         cut = None
         if a.mode == "braille" and not a.dither and len(images) > 1:  # one dot threshold, so dots hold still
             lum = min(1, a.brightness * sum(ImageStat.Stat(im.convert("L")).mean[0] for im in images) / len(images) / 255)
@@ -440,7 +463,8 @@ def main(argv=None):
         def look(im, palette):
             return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
-                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut)  # same seed: same layout
+                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut,  # same seed: same layout
+                           over_photo=bool(a.under))
 
         pal = a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker
@@ -451,21 +475,33 @@ def main(argv=None):
             pal = sorted({c[2] for row in look(sheet, pal) for c in row if len(c) == 3}) or pal
         grids = [look(im, pal) for im in images]
         if a.effect:
-            if len(grids) > 1:
-                raise ValueError("--effect needs a still image, not an animation")
+            moving = len(grids) > 1
+            if moving and a.effect != "dust":
+                raise ValueError("--effect %s needs a still image; only dust also works on an animation" % a.effect)
             if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
-                grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
-            grids = effects.frames(grids[0], a.effect)
-            durs = [1000 / effects.FPS] * (len(grids) - 1) + [HOLD_MS]
+                grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in g] for g in grids], None
+            if moving:  # the animation keeps playing under the dust, at its own frame times
+                grids = effects.frames(grids[0], a.effect, bg=back, seq=grids)
+                durs = [durs[i % len(durs)] for i in range(len(grids))]
+            else:
+                grids = effects.frames(grids[0], a.effect, bg=back)
+                durs = [1000 / effects.FPS] * len(grids)
+        hold = a.hold if a.hold is not None else 1.5 if a.effect and a.effect not in effects.LOOPS else 0
+        durs[-1] += hold * 1000
         if ext in (".gif", ".webp", ".mp4"):
             cw = max(1, round(a.font_size * CELL_W))
             size = len(grids[0][0]) * cw * len(grids) * max(1, round(cw / a.aspect)) * len(grids[0]) * 4
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow) for g in grids]
+            unders = [None] * len(grids)
+            if a.under:  # the photo behind the glyphs
+                soft = [underlay(im, bg, a.under) for im in photos]
+                unders = [soft[min(i, len(soft) - 1)] for i in range(len(grids))]  # an effect reuses its one still
+            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow, u)
+                   for g, u in zip(grids, unders)]
             if ext == ".mp4":
-                to_mp4(out, durs, a.output, a.fps)
+                to_mp4(out, durs, a.output, a.fps, a.crf)
             else:
                 # GIF ticks are 10 ms and browsers slow frames under 20 ms, so frames snap to 20 ms or more: 60 fps becomes ~50 fps.
                 out, durs = snap(out, durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
@@ -476,6 +512,10 @@ def main(argv=None):
                 f.write(to_html_player(grids, durs, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow))
         else:
             play([to_ansi(g, fg).replace("\n", "\x1b[K\n") for g in grids], durs)
+        if ext:
+            kb = os.path.getsize(a.output) / 1000
+            print("wrote %s (%s, %.1f s)" % (a.output, "%.1f MB" % (kb / 1000) if kb >= 1000 else "%d KB" % -(-kb // 1),
+                                            sum(durs) / 1000))
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:  # one-line error for any bad input, never a traceback
