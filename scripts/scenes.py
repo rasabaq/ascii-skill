@@ -479,3 +479,115 @@ def text(w, h, n, seed, word="ASCII"):
             x += cw + gap
         out.append(_shrink(im, w, h))
     return out
+
+
+def _curve(p0, p1, p2, steps=20):
+    """Points of a quadratic Bezier from p0 to p2 through p1."""
+    out = []
+    for i in range(steps + 1):
+        u, s = i / steps, 1 - i / steps
+        out.append((s * s * p0[0] + 2 * s * u * p1[0] + u * u * p2[0],
+                    s * s * p0[1] + 2 * s * u * p1[1] + u * u * p2[1]))
+    return out
+
+
+def _blade(ox, oy, r0, r1, wdt, rot, squash):
+    """A petal or leaf: two quadratic curves from a base at radius r0 to a pointed tip at r1,
+    in local coords (x out, y sideways), rotated by rot and squashed in y."""
+    pts = []
+    for p0, p1, p2 in (((r0, 0), (r0 + 0.3 * (r1 - r0), -wdt), (r1, 0)),
+                       ((r1, 0), (r0 + 0.7 * (r1 - r0), wdt), (r0, 0))):
+        for i in range(13):
+            u, s = i / 12, 1 - i / 12
+            a = s * s * p0[0] + 2 * s * u * p1[0] + u * u * p2[0]
+            b = s * s * p0[1] + 2 * s * u * p1[1] + u * u * p2[1]
+            pts.append((ox + a * math.cos(rot) - b * math.sin(rot),
+                        oy + squash * (a * math.sin(rot) + b * math.cos(rot))))
+    return pts
+
+
+def _toward(pts, base, q):
+    """Shrink the polygon toward its base point: the tip recedes, so a darker layer sits at the base."""
+    return [(base[0] + q * (p[0] - base[0]), base[1] + q * (p[1] - base[1])) for p in pts]
+
+
+@scene(320, 240, 72, 25)
+def flower(w, h, n, seed):
+    """A flower breathing open and closed: two rings of pointed petals around an amber stamen
+    center, on a swaying stem with two leaves, while loose petals drift down. Petals darken
+    toward the base so the tips glow. Every motion is an integer number of sine cycles per
+    loop, so it loops seamlessly."""
+    rng = random.Random(seed)
+    W, H = w * SS, h * SS
+    cx, cy, R = W / 2, H * 0.44, 0.36 * min(W, H)
+    tilt = 0.62  # squash y: the flower faces slightly away
+    rings = []
+    for ri, ring in enumerate(((12, 0.16, 1.00, 0.965, 0.30), (10, 0.12, 0.62, 0.925, 0.24))):
+        count, r0, r1, hue, wdt = ring
+        petals = []
+        for k in range(count):
+            a = TAU * (k + (0.5 if ri else 0)) / count  # the inner ring is offset half a petal
+            petals.append((a, hue + rng.uniform(-0.02, 0.02),
+                           rng.uniform(0.88, 1.04), rng.uniform(0.9, 1.1), rng.uniform(-0.25, 0.25)))
+        rings.append((r0 * R, r1 * R, wdt * R, petals, ri))
+    falls = [(rng.uniform(0, W), rng.random(), rng.choice((1, 1, 2)),
+              rng.uniform(0.5, 1.1) * 0.045 * min(W, H), rng.uniform(0, TAU)) for _ in range(6)]
+    out = []
+    for k in range(n):
+        t = k / n
+        breathe = math.sin(TAU * t)
+        rot = 0.07 * math.sin(TAU * t + 1.0)  # the whole flower sways
+        im = Image.new("RGB", (W, H))
+        draw = ImageDraw.Draw(im)
+        sway = 0.05 * R * math.sin(TAU * t + 1.0)
+        # Stem: a quadratic curve from under the flower to the bottom edge, swaying with it.
+        top = (cx + sway, cy + tilt * R * 0.95)
+        ctrl = (cx + sway * 0.5, cy + tilt * R * 0.95 + (H - cy) * 0.45)
+        draw.line(_curve(top, ctrl, (cx + sway * 1.8, H + 8)), fill=(55, 115, 55),
+                  width=max(2, round(0.022 * min(W, H))), joint="curve")
+        mid = _curve(top, ctrl, (cx + sway * 1.8, H + 8), 10)[5]
+        for side in (-1, 1):  # two leaves on the stem
+            ang = side * (1.15 + 0.08 * math.sin(TAU * t + 1.0))
+            pts = _blade(mid[0], mid[1], 0, 0.42 * R, 0.12 * R, ang, 1.0)
+            col = (60, 130, 60)
+            draw.polygon(pts, fill=col)
+            draw.polygon(_toward(pts, mid, 0.75), fill=(45, 100, 48))
+        # Petals: the outer ring longer and deeper in color, the inner ring offset half a step.
+        for r0, r1, wdt, petals, ri in rings:
+            for a, hue_k, lj, wj, ph in petals:
+                ang = a + rot + 0.04 * math.sin(TAU * t + ph)
+                r1k = r1 * lj * (1 + 0.14 * breathe)
+                base = (cx + r0 * math.cos(ang), cy + tilt * r0 * math.sin(ang))
+                pts = _blade(cx, cy, r0, r1k, wdt * wj * (1 + 0.09 * math.sin(TAU * t - 0.7)), ang, tilt)
+                hsv = colorsys.hsv_to_rgb(hue_k % 1, 0.72, 0.82 if ri == 0 else 0.55)
+                col = tuple(round(v * 255) for v in hsv)
+                draw.polygon(pts, fill=col)
+                for q, dk in ((0.8, 0.18), (0.58, 0.40)):
+                    draw.polygon(_toward(pts, base, q), fill=tuple(round(c * (1 - dk)) for c in col))
+        # Stamen center: concentric amber, smallest when the petals are open.
+        rC = 0.30 * R * (1 - 0.08 * breathe)
+        for q, col in ((1, (120, 60, 20)), (0.85, (180, 110, 30)), (0.6, (235, 170, 50)), (0.35, (255, 220, 120))):
+            r = rC * q
+            draw.ellipse((cx - r, cy - tilt * r, cx + r, cy + tilt * r), fill=col)
+        for i in range(12):
+            a = TAU * i / 12 + rot
+            x, y = cx + 0.72 * rC * math.cos(a), cy + tilt * 0.72 * rC * math.sin(a)
+            rr = 0.028 * R
+            draw.ellipse((x - rr, y - rr, x + rr, y + rr), fill=(255, 195, 70))
+        # Loose petals drift down, swaying, fading in and out at the wrap so the loop is clean.
+        for x0, p0, speed, sz, ph in falls:
+            pos = (p0 + speed * t) % 1.0
+            x = x0 + 0.18 * W * math.sin(TAU * speed * t + ph)
+            y = -0.15 * H + pos * 1.3 * H
+            ang = TAU * speed * t + ph
+            lum = 0.25 + 0.75 * math.sin(math.pi * pos) ** 2
+            ink = tuple(round(v * lum) for v in (215, 90, 145))
+            pts = []
+            for i in range(10):
+                a = TAU * i / 10
+                px, py = sz * math.cos(a), 0.55 * sz * math.sin(a)
+                pts.append((x + px * math.cos(ang) - py * math.sin(ang),
+                            y + px * math.sin(ang) + py * math.cos(ang)))
+            draw.polygon(pts, fill=ink)
+        out.append(_shrink(im, w, h))
+    return out
