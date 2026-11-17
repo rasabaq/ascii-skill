@@ -350,7 +350,8 @@ def main(argv=None):
     p.add_argument("--glow", type=float, default=0, help="soft bloom around the glyphs, 0-1 (try 0.8)")
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
-    p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
+    p.add_argument("--scene", metavar="NAME|FILE.py", help="draw a looping animation instead of reading input: "
+                   "a scene file you wrote (see scenes.load) or one of: %s"
                    % ", ".join(scenes.SCENES))
     p.add_argument("--subject", action="store_true",
                    help="still camera: keep only what moves and draw it on a clean page (white if the background is light)")
@@ -362,6 +363,13 @@ def main(argv=None):
     a = p.parse_args(argv)
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
+    if a.scene and a.scene.endswith(".py"):
+        try:
+            a.scene = scenes.load(a.scene)
+        except Exception as e:  # the file is code: show its error and stop
+            p.error("cannot load scene file %s: %s: %s" % (a.scene, type(e).__name__, e))
+    elif a.scene and a.scene not in scenes.SCENES:
+        p.error("unknown scene %r: give a .py scene file or one of: %s" % (a.scene, ", ".join(scenes.SCENES)))
     user_bg = a.bg
     ext = os.path.splitext(a.output or "")[1].lower()
     poster_defaults(a, bool(ext))

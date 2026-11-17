@@ -42,7 +42,30 @@ main(["--scene", "cube", "-w", "30", "--mode", "braille", "-o", out])
 gif = Image.open(out)
 assert gif.n_frames > 40 and gif.info.get("loop") == 0
 assert len({f.convert("RGB").tobytes() for f in ImageSequence.Iterator(gif)}) > 10, "frames differ"
-for argv in (["--scene", "nope"], [], ["x.gif", "--scene", "cube"]):
+# A scene file drawn on request: --scene takes its path. A file with no @scene, or broken code, is a usage error.
+good, empty, broken = (os.path.join(tmp, f) for f in ("blob.py", "empty.py", "broken.py"))
+with open(good, "w") as f:
+    f.write("""import math
+from PIL import Image, ImageDraw
+from scenes import TAU, scene
+
+@scene(80, 60, 20, 10)
+def blob(w, h, n, seed):
+    out = []
+    for k in range(n):
+        im = Image.new("RGB", (w, h))
+        x = w / 2 + math.sin(TAU * k / n) * w / 4
+        ImageDraw.Draw(im).ellipse((x - 10, h / 2 - 10, x + 10, h / 2 + 10), fill=(255, 255, 255))
+        out.append(im)
+    return out
+""")
+open(empty, "w").write("x = 1\n")
+open(broken, "w").write("def (\n")
+out = os.path.join(tmp, "blob.gif")
+main(["--scene", good, "-w", "20", "-o", out])
+assert Image.open(out).n_frames > 10 and "blob" in SCENES
+for argv in (["--scene", "nope"], [], ["x.gif", "--scene", "cube"], ["--scene", empty], ["--scene", broken],
+             ["--scene", os.path.join(tmp, "missing.py")]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             main(argv)

@@ -8,8 +8,11 @@
 
 A scene is `scene(w, h, n, seed) -> list of n images`. It draws one full loop: frame i is time t = i / n,
 so frame n would be frame 0 again and the last frame flows into the first.
+
+A scene can also live in its own file, for a subject drawn on request (`--scene seaweed.py`, see load()).
 """
 import colorsys
+import importlib.util
 import math
 import random
 
@@ -28,6 +31,19 @@ def scene(w, h, n, fps):
         SCENES[fn.__name__], DEFAULTS[fn.__name__] = fn, (w, h, n, fps)
         return fn
     return add
+
+
+def load(path):
+    """Run a scene file and return the name of the scene it adds. The file does `from scenes import scene`
+    and puts `@scene(w, h, frames, fps)` on one function, just like the scenes in this module."""
+    before = dict(SCENES)
+    spec = importlib.util.spec_from_file_location("scene_file", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    new = [k for k, fn in SCENES.items() if before.get(k) is not fn]
+    if not new:
+        raise ValueError("it adds no scene: put @scene(w, h, frames, fps) on its drawing function")
+    return new[-1]
 
 
 def frames(name, seed=0, fps=None):
