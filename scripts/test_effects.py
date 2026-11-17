@@ -53,3 +53,35 @@ for name, f in (("scan", 30), ("matrix", 25)):
     assert name == "matrix" or max(lum(c) for r in light for _ch, c in r) <= lum((29, 53, 87))  # no pale glow
     assert min(lum(c) for r in light for _ch, c in r) < 20, name
 print("ok light page")
+
+# Shimmer: the art holds still (same cells filled, same colors) while a few glyphs swap for others of the same weight.
+art = [[("@S0x8#"[(x + y) % 6] if (x * y) % 5 else " ", (x * 9, y * 20, 90)) for x in range(30)] for y in range(12)]
+seq = frames(art, "shimmer", seed=4)
+for f in seq:
+    assert all((ch == " ") == (a[0] == " ") and c == a[1] for r, ar in zip(f, art) for (ch, c), a in zip(r, ar))
+changed = [sum(ch != a[0] for r, ar in zip(f, art) for (ch, _c), a in zip(r, ar)) for f in seq]
+cells = sum(ch != " " for r in art for ch, _c in r)
+assert 0.02 < sum(changed) / len(seq) / cells < 0.2, sum(changed) / len(seq) / cells  # a few at a time
+assert all(changed[len(seq) // 4: -len(seq) // 4])  # always something moving mid-loop
+weight = lambda ch: next(i for i, fam in enumerate(("@#%&$B8", "0SXZ96", "x+=*")) if ch in fam)
+assert all(weight(ch) == weight(a[0]) for f in seq for r, ar in zip(f, art) for (ch, _c), a in zip(r, ar) if ch != " ")
+print("ok shimmer")
+
+# Dust: starts on the art, eats the side the wind blows toward, and grains fly out past the art's edge.
+blob = [[("#" if 20 <= x < 40 else " ", (200, 200, 200)) for x in range(60)] for _ in range(20)]
+seq = frames(blob, "dust", seed=4)
+assert seq[0] == blob
+mid = seq[len(seq) // 3]
+kept = lambda f, xs: sum(f[y][x][0] == "#" for y in range(20) for x in xs)
+assert kept(mid, range(20, 26)) < kept(mid, range(34, 40))  # left edge gone first
+assert any(ch != " " for f in seq for r in f for ch, _c in r[:20])  # dust outside the art
+right = frames(blob, "dust", seed=4, wind="right")[len(seq) // 3]
+assert kept(right, range(34, 40)) < kept(right, range(20, 26))
+print("ok dust")
+
+# Dust over a moving picture: the picture keeps playing under the dust, and the clip is whole runs of it.
+movie = [[[("#" if 20 <= x < 40 else " ", (200, 200, 200 - 20 * k)) for x in range(60)] for _ in range(20)] for k in range(8)]
+seq = frames(movie[0], "dust", seed=4, seq=movie)
+assert len(seq) % 8 == 0 and seq[-1] == movie[-1]
+assert seq[3][0][39] == movie[3][0][39] and seq[5][0][39] == movie[5][0][39]  # untouched cells play on
+print("ok dust moving")

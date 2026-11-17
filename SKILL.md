@@ -1,6 +1,6 @@
 ---
 name: ascii-art
-description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also animates still images with matrix-rain, decode, scan, glitch and wave effects. Also makes an ASCII animation from a short description such as "a running horse", using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, or a "matrix" / retro text look.
+description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also draws a photo as small glowing glyphs over the photo itself (characters, lines, diagonal strokes, diamonds, dots, crosses), or as a mosaic. Also animates still images with matrix-rain, decode, scan, glitch, wave, shimmer and dust effects. Also makes ASCII art or animation from a short description with no image at all, such as "seaweed" or "a running horse", by drawing it in code or using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, a "matrix" / retro text look, or art that crumbles, decays or blows away as dust.
 ---
 
 # ASCII art
@@ -17,6 +17,7 @@ Paths below are relative to this skill's folder.
 
 1. Get the image path. For a URL, download it first with `curl -L -o /tmp/in.img URL`.
 2. Pick the output. Use stdout text to show the art in chat. Use `-o file.png` or `-o file.html` when the user wants a file to share.
+   For a photo that should still look like the photo, use a photo style: `--style characters -o out.png` (see "Photo styles").
 3. Run it, then read the result. For a PNG, open the image and look at it.
 4. If the subject is hard to see, tune and run again (see "Fixing weak results").
 
@@ -25,7 +26,9 @@ Paths below are relative to this skill's folder.
 | Option | What it does |
 |---|---|
 | `-w 100` | Width in characters (1–1000). Use 60–80 for chat, 120–200 for PNG/HTML, 120+ for screenshots of text. |
-| `-c standard` | Character ramp: `standard`, `detailed`, `blocks`, `terminal`, `minimal`, `binary`, `dots`, or your own string from dense to empty, like `-c "#*. "`. |
+| `-c standard` | Character ramp: `standard`, `detailed`, `blocks`, `terminal`, `minimal`, `binary`, `dots`, the six style ramps (`characters`, `lines`, `diagonal`, `diamond`, `dot`, `cross`), or your own string from dense to empty, like `-c "#*. "`. |
+| `--style characters` | The photo look in one step: `characters`, `lines`, `diagonal`, `diamond`, `dot` or `cross`. See "Photo styles". |
+| `--under 0.9` | PNG, JPG, WebP and HTML: draws the original photo behind the glyphs, untouched. The number (0–1) is how strongly it shows: `1` is the photo as it is, lower dims it toward the page. `--style` sets it to 0.9. |
 | `-o out.png` | Output by extension: `.txt`, `.html`, `.png`, `.jpg`, `.webp`. No `-o` prints plain text to stdout. |
 | `--bg black` | Background: `black` (default), `white`, `none` (transparent PNG/HTML), or any color. On a dark background bright pixels get dense glyphs. On a light one dark pixels do. |
 | `--fg matrix` | One ink color: `matrix`, `amber`, `cyan`, `magenta`, `mint`, or any CSS color or hex. Without it, PNG/HTML use the photo's own colors. |
@@ -37,6 +40,7 @@ Paths below are relative to this skill's folder.
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
 | `--font-size 12` | Glyph size in px for PNG/HTML. |
+| `--gap 1` | Px of page color around each tile (`tiles`) or between rows of word boxes (`words`). In PNG it also parts the pixels of `halfblock`, which makes a mosaic. |
 
 ## Fixing weak results
 
@@ -53,6 +57,8 @@ The script already stretches every image to its full tonal range, so most images
 - Too much noise: use fewer columns or a shorter ramp (`-c minimal`).
 - Banding in gradients: add `--dither`.
 - Chat output: never use `--color`, because escape codes show up as junk. Wrap the text in a code block.
+- With `--style`, a dark photo gets only a few glyphs: add `--brightness 1.5`. For more glyphs everywhere, give your own ramp with no spaces at the end, like `-c "◆◆◇◇"`.
+- With `--style`, the photo is too faint or too strong: change `--under` (0.5 is dimmer and makes the glyphs stand out, 1 is the photo as it is).
 - SVG is not supported. Convert it to PNG first (`rsvg-convert -w 800 logo.svg -o logo.png`).
 
 ## Modes in short
@@ -60,6 +66,42 @@ The script already stretches every image to its full tonal range, so most images
 - `braille` ignores `-c`. Use it with `--dither` for photos and without it for logos. Colors follow the photo, or `--fg`.
 - `halfblock` ignores `-c`, `--dither` and `--fg`, because the colors are the picture. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
 - Terminals draw braille dots small, so braille looks dimmer there than in a PNG.
+
+## Photo styles
+
+`--style NAME` draws a photo as small glyphs over the photo itself. The photo stays visible under the glyphs in its original colors and sharpness. Each glyph takes the color of the pixel under it, a little brighter, so it glows. Bright parts get the heaviest glyph. Dark parts get no glyph, so only the photo shows there. One option is enough:
+
+```bash
+uv run scripts/ascii.py photo.jpg --style diamond -o out.png
+```
+
+| Style | Glyphs | The look |
+|---|---|---|
+| `--style characters` | `@ # 0 8 S X x + = -` | Letters and signs with room around them. The classic ASCII look. |
+| `--style lines` | `┃ ╏ ╹ '` | Vertical dashes. Brighter parts get longer dashes. |
+| `--style diagonal` | `╲ / ′` | Slanted strokes, like pencil hatching. The brightest parts lean the other way. |
+| `--style diamond` | `◆ ◇` | Diamonds on a square grid: filled on bright parts, hollow on mid tones. |
+| `--style dot` | `● • ·` | Dots on a square grid that grow with brightness, like a halftone print. |
+| `--style cross` | `✖ ✕ ×` | Crosses on a square grid, like cross-stitch. |
+
+- Use it with `-o out.png`, `.jpg`, `.webp` or `.html`. The HTML keeps the photo inside the file.
+- A style sets `-c`, `-w` (120 or 160), `--aspect`, `--font-size` and `--under 0.9` for you. Any of these that you give yourself wins. For finer glyphs raise `-w` (200–250). For a bigger picture raise `--font-size`.
+- `--under 0` turns the photo off: the glyphs sit on the flat page and get brighter ink.
+- `--under` also works without a style, with any ramp and with `--mode shape` or `--mode braille`: `-c detailed --under 0.5 -o out.png`.
+- `--fg` gives all glyphs one color. Without it they take the photo's colors.
+- For text output (stdout or `.txt`) a style only picks the ramp. There is no photo under text.
+- In `animate.py` a style works the same for `.gif`, `.webp` and `.mp4` (see "Animation").
+
+### Mosaic and pixel art
+
+These two use `--mode halfblock`, which keeps the photo's true colors. They do not use `--style`.
+
+```bash
+uv run scripts/ascii.py photo.jpg --mode halfblock -w 120 -o pixels.png                            # pixel art
+uv run scripts/ascii.py photo.jpg --mode halfblock --gap 1 --font-size 24 -w 96 -o mosaic.png     # mosaic
+```
+
+`--gap 1` puts a thin line of page color around every pixel, so each one becomes a small square tile. It works in PNG, JPG, WebP and in animations (GIF, WebP, MP4). HTML and the terminal ignore it.
 
 ## Tile poster
 
@@ -97,10 +139,14 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 - Print-friendly: `--bg white --fg black -o out.png`
 - Print or light page (prints, paintings, line art on paper): `--mode braille --sharpen --brightness 1.6 -w 200 --bg "#f3ead8" --fg "#1d3557" -o out.png`. No `--dither`.
 - Tile poster: `--mode tiles -w 36 -o poster.png`
+- Glyphs over the photo: `--style characters -o out.png` (also `lines`, `diagonal`, `diamond`, `dot`, `cross`)
+- Mosaic: `--mode halfblock --gap 1 --font-size 24 -w 96 -o out.png`
+- Pixel art: `--mode halfblock -w 120 -o out.png`
+- Moving glyphs over a photo: `uv run scripts/animate.py photo.jpg --style characters --effect shimmer -o out.mp4`
 
 ## Animation
 
-`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
+`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--style`, `--under`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
 
 ```bash
 uv run scripts/animate.py cat.gif                          # play in the terminal, Ctrl-C stops
@@ -140,13 +186,38 @@ uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --
 
 ### Effects for still images
 
-`--effect NAME` turns one image into a 2–2.6 second animation at 25 fps that ends on the finished art. `matrix`, `decode` and `scan` then hold the art for 1.5 seconds; `glitch` and `wave` loop with no pause. `--hold SECONDS` changes the pause (`--hold 0` for none). Every effect works with every mode.
+`--effect NAME` turns one image into a 2–4 second animation at 25 fps that ends on the finished art. `matrix`, `decode` and `scan` then hold the art for 1.5 seconds; `glitch`, `wave`, `shimmer` and `dust` loop with no pause. `--hold SECONDS` changes the pause (`--hold 0` for none). Every effect works with every mode.
 
 - `matrix`: falling columns of glyphs with a bright head, leaving the art behind them.
 - `decode`: cells scramble through random glyphs and lock in, sweeping left to right.
 - `scan`: a bright CRT line sweeps down and types each row in, with a short glow.
 - `glitch`: short bursts of torn rows, glyph swaps and red/cyan bands. Loops well.
 - `wave`: rows sway sideways on a sine wave that swells and calms. Loops well.
+- `shimmer`: the art holds still while its glyphs keep swapping for others of the same weight (`S` for `#`, `0` for `@`; in braille a dot moves), a few at a time, so it looks alive. Loops well. Best with `--under`.
+- `dust`: the art comes apart into wind-blown dust and grows back, over 4 seconds. The edge the wind blows toward (the left) crumbles first; its glyphs wear down to `* + : .` as they swirl away and fade, and a few grains are red. Loops well. Best on a subject with dark space beside it, so the dust has room to fly. To blow right instead, call `effects.frames(grid, "dust", wind="right")` from Python.
+
+`dust` also works on a moving input (a GIF, a video or a `--scene`): the animation keeps playing while it crumbles, and the clip is whole runs of it, so it still loops. Every other effect needs a still image.
+
+```bash
+uv run scripts/animate.py --scene donut --effect dust -o donut.mp4   # a spinning donut blowing away
+```
+
+`--under 0.4` (GIF, WebP and MP4) draws the original photo behind the glyphs instead of a flat page. The number is how strongly it shows, from 0 to 1. Each glyph then keeps the color of its own pixel, a little brighter. It suits photos with photo colors on a dark page:
+
+```bash
+uv run scripts/animate.py sky.jpg --effect shimmer --under 0.45 -w 110 -o sky.mp4
+```
+
+`--style NAME` (see "Photo styles") sets the ramp, the cell shape and `--under 0.9` in one step. It works on stills with an effect, on GIFs, on video and on scenes:
+
+```bash
+uv run scripts/animate.py photo.jpg --style characters --effect shimmer -o out.mp4   # letters that keep changing over the photo
+uv run scripts/animate.py photo.jpg --style diamond --effect decode -o out.mp4       # diamonds sweep in over the photo
+uv run scripts/animate.py clip.mp4 --style lines -o out.mp4                          # a video as moving dashes
+```
+
+- `shimmer` only swaps letters and braille dots. With `lines`, `diagonal`, `diamond`, `dot` and `cross` nothing moves, so use another effect there.
+- The HTML player and the terminal cannot show the photo under the glyphs. There a style only sets the ramp and the cell shape. Use `.mp4`, `.gif` or `.webp` for the full look.
 
 ### Scenes
 
@@ -162,6 +233,7 @@ uv run scripts/animate.py --scene walker --mode braille -o run.gif       # a sti
 uv run scripts/animate.py --scene rain --mode braille -o rain.gif        # rain with splashes
 uv run scripts/animate.py --scene bounce --mode halfblock -o ball.gif    # a ball that squashes as it bounces
 uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the word ASCII riding a rainbow wave
+uv run scripts/animate.py --scene flower -o flower.gif                    # a flower breathing open and closed
 ```
 
 - Use `-w 60` to `-w 100`. `--mode halfblock` gives the best color; `--mode braille` gives the crispest lines.
@@ -170,7 +242,13 @@ uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the w
 
 ### From a description
 
-When the user describes a moving thing ("a running horse") instead of giving a file, find a free clip first. `scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
+When the user describes a thing ("seaweed", "a running horse") instead of giving a file, pick one path:
+
+- A built-in scene matches: use it (see "Scenes").
+- A simple or stylized subject (seaweed, a jellyfish, a campfire, a clock, a planet, falling leaves): draw it yourself (see "Draw it yourself"). Shapes and motion are yours to choose, and nothing needs credit.
+- Real motion that is hard to draw (a galloping horse, a dancer): fetch a clip, as below. If no clip fits, draw it.
+
+`scripts/fetch.py` searches Wikimedia Commons for animated GIFs and short videos with a free license and downloads the best match.
 
 1. Fetch a clip: `uv run scripts/fetch.py "running horse" -o /tmp/clip`. It adds the right extension (`.gif`, `.webm`), then prints the saved path and an attribution line. To choose yourself, run with `--list` first, then `--pick N`.
 2. Convert the printed path: `uv run scripts/animate.py /tmp/clip.gif --mode braille -w 80 --bg white -o out.gif`. Any preset works. For long videos add `--duration 5`.
@@ -179,7 +257,45 @@ When the user describes a moving thing ("a running horse") instead of giving a f
 
 Search with short plain English words for the subject and the motion. Line drawings, silhouettes and clips on a plain background read best as ASCII. Busy real-world video often does not.
 
-If nothing suitable is found, use a code-drawn scene instead: `animate.py --scene NAME` (see "Scenes").
+If nothing suitable is found, draw it yourself (below).
+
+### Draw it yourself
+
+Write a scene file and pass its path to `--scene`. It works like a built-in scene, so every mode, color and output works.
+
+```python
+# /tmp/seaweed.py
+import math, random
+from PIL import Image, ImageDraw
+from scenes import SS, TAU, _shrink, scene
+
+@scene(320, 240, 75, 25)                  # canvas width, height, frames per loop, fps
+def seaweed(w, h, n, seed):
+    rng = random.Random(seed)             # all randomness from the seed, picked once before the loop
+    strands = [(rng.uniform(0.05, 0.95) * w * SS, rng.random()) for _ in range(8)]
+    out = []
+    for k in range(n):
+        t = k / n                         # 0 to 1 over one loop
+        im = Image.new("RGB", (w * SS, h * SS))
+        draw = ImageDraw.Draw(im)
+        for x0, phase in strands:
+            pts = [(x0 + math.sin(TAU * (t - 0.7 * s + phase)) * 0.09 * w * SS * s, (1 - 0.8 * s) * h * SS)
+                   for s in (i / 30 for i in range(31))]
+            draw.line(pts, fill=(120, 240, 90), width=8 * SS)
+        out.append(_shrink(im, w, h))     # draw at SS x size, shrink for smooth edges
+    return out
+```
+
+```bash
+uv run scripts/animate.py --scene /tmp/seaweed.py -w 80 -o seaweed.gif
+```
+
+- Make it loop. Drive every motion with `t`: `sin(TAU * t)`, or `(p0 + speed * t) % 1` with a whole-number `speed` for things that wrap, like bubbles or rain. Frame `n` must equal frame `0`.
+- Draw bright on black. Dim colors turn into sparse, faint glyphs. Fill shapes and use thick lines, because thin detail is lost at 80 columns.
+- Look at a frame of the result and fix what reads poorly, then run again. Most subjects need one or two rounds.
+- Copy patterns from `scripts/scenes.py`: 3D shading (`donut`, `cube`), particles (`fire`, `rain`), and a walking figure (`walker`).
+- Two finished scene files show the level of detail to aim for: `examples/seaweed.py` (kelp and bubbles) and `examples/koi.py` (koi with patterns, fins, eyes and shading, swimming slow 8-second loops). Run either one with `--scene examples/koi.py`. Copy one as a starting point for a similar subject.
+- For a still picture, save one frame and convert it: `uv run --with pillow python -c "import sys; sys.path.insert(0, 'scripts'); from scenes import load, SCENES; SCENES[load('/tmp/seaweed.py')](320, 240, 1, 0)[0].save('/tmp/still.png')"`, then `scripts/ascii.py /tmp/still.png`.
 
 ### Put it on a web page
 
@@ -212,4 +328,10 @@ to_png(grid).save("cat_ascii.png")
 
 from effects import frames  # list of grids; the last one is `grid`
 intro = [to_png(g) for g in frames(grid, "decode")]
+
+# Glyphs over the photo: over_photo=True keeps each pixel's own color, and underlay() gives the photo to draw behind them.
+from ascii import underlay
+photo = Image.open("cat.jpg")
+over = convert(photo, width=120, charset="diamond", aspect=1.0, over_photo=True)
+to_png(over, font_size=16, aspect=1.0, under=underlay(photo, "black", 0.9)).save("cat_diamond.png")
 ```

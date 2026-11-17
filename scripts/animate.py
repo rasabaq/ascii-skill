@@ -25,7 +25,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, _corner, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, poster_defaults, rgb, to_ansi, to_png)
+                   POSTER_BG, poster_defaults, rgb, stretch_lut, to_ansi, to_png, underlay, value_hist)
 import effects  # noqa: E402
 import scenes  # noqa: E402
 
@@ -51,7 +51,7 @@ def video_frames(path, a, px, cap):
         raise ValueError("cannot read %s as an image; video input needs ffmpeg and ffprobe" % path)
     probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                             "stream=avg_frame_rate", "-of", "csv=p=0", path], capture_output=True, text=True)
-    num, _, den = probe.stdout.strip().partition("/")
+    num, _, den = (probe.stdout.split() or [""])[0].partition("/")  # some MP4s list the rate twice (timecode track)
     if probe.returncode or not num:
         raise ValueError("cannot read %s: not an image or video" % path)
     rate = a.fps or (float(num) / float(den or 1) if num != "0" else 25)
@@ -100,24 +100,8 @@ def timeline(frames, start_ms, length_ms, fps, cap):
 
 
 def shared_lut(images, cutoff=1):
-    """One autocontrast lookup table (same math as ImageOps.autocontrast) over all frames, so brightness never pumps."""
-    hist = [sum(col) for col in zip(*(im.histogram() for im in images))]
-    lut = []
-    for c in range(3):
-        h = hist[c * 256:(c + 1) * 256]
-        cut, acc, lo, hi = sum(h) * cutoff // 100, 0, 0, 255
-        for lo in range(256):
-            acc += h[lo]
-            if acc > cut:
-                break
-        acc = 0
-        for hi in range(255, -1, -1):
-            acc += h[hi]
-            if acc > cut:
-                break
-        scale = 255 / (hi - lo) if hi > lo else 1
-        lut += [min(255, max(0, int((v - lo) * scale))) if hi > lo else v for v in range(256)]
-    return lut
+    """One autocontrast lookup table over all frames, so brightness never pumps (see ascii.stretch_lut)."""
+    return stretch_lut([sum(col) for col in zip(*(value_hist(im) for im in images))], cutoff)
 
 
 def background(images, cut, n=25):
@@ -361,14 +345,18 @@ def main(argv=None):
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
-    p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image: %s" % ", ".join(effects.EFFECTS))
+    p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image (dust also works on an animation or --scene): %s"
+                   % ", ".join(effects.EFFECTS))
     p.add_argument("--hold", type=float, help="seconds the last frame stays before the loop restarts (default: 1.5 "
                    "for matrix, decode and scan; 0 for everything else, a seamless loop)")
+    p.add_argument("--under", type=float, metavar="0-1", help="GIF/WebP/MP4: draw the original photo behind "
+                   "the glyphs; the number is how strong it shows (try 0.4). Pairs well with --effect shimmer")
     p.add_argument("--crf", type=float, default=23, help="MP4 quality, 0-51: lower is sharper and bigger (default 23; "
-                   "with --font-size 16 or more, 28 still looks clean and is ~30% smaller)")
+                   "with --font-size 16 or more, 28 still looks clean and is ~30%% smaller)")
     p.add_argument("--gap", type=int, help="px of background around each tile (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
-    p.add_argument("--scene", choices=scenes.SCENES, help="draw a looping animation instead of reading input: %s"
+    p.add_argument("--scene", metavar="NAME|FILE.py", help="draw a looping animation instead of reading input: "
+                   "a scene file you wrote (see scenes.load) or one of: %s"
                    % ", ".join(scenes.SCENES))
     p.add_argument("--subject", action="store_true",
                    help="still camera: keep only what moves and draw it on a clean page (white if the background is light)")
@@ -380,21 +368,34 @@ def main(argv=None):
     a = p.parse_args(argv)
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
+    if a.scene and a.scene.endswith(".py"):
+        try:
+            a.scene = scenes.load(a.scene)
+        except Exception as e:  # the file is code: show its error and stop
+            p.error("cannot load scene file %s: %s: %s" % (a.scene, type(e).__name__, e))
+    elif a.scene and a.scene not in scenes.SCENES:
+        p.error("unknown scene %r: give a .py scene file or one of: %s" % (a.scene, ", ".join(scenes.SCENES)))
     user_bg = a.bg
     ext = os.path.splitext(a.output or "")[1].lower()
-    poster_defaults(a, bool(ext))
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
+    if a.under and ext not in (".gif", ".webp", ".mp4"):
+        p.error("--under needs .gif, .webp or .mp4 output")
+    poster_defaults(a, bool(ext))
+    if ext in (".html", ".htm"):
+        a.under = None  # a --style asks for the photo, but the HTML player cannot show it
     if a.font_size < 1 or a.max_frames < 1 or a.start < 0 or (a.fps is not None and a.fps <= 0) \
             or (a.duration is not None and a.duration <= 0) or (a.width is not None and not 1 <= a.width <= MAX_SIDE) \
-            or (a.hold or 0) < 0 or not 0 <= a.crf <= 51:
+            or (a.hold or 0) < 0 or not 0 <= a.crf <= 51 or not 0 <= (a.under or 0) <= 1:
         p.error("need --font-size >= 1, --max-frames >= 1, --start >= 0, --fps > 0, --duration > 0, --hold >= 0, "
-                "--crf 0-51, -w 1-%d" % MAX_SIDE)
+                "--crf 0-51, --under 0-1, -w 1-%d" % MAX_SIDE)
     try:
         bg = "black" if a.bg == "none" else a.bg
         back = rgb(bg)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image
         px = 2 * SUBPIXELS[a.mode][0] * (a.width or MAX_SIDE // 2)  # 2x the sampled pixels; convert() does the final resize
+        if a.under:  # the photo is drawn behind the glyphs, so keep it as sharp as the output
+            px = max(px, (a.width or 100) * round(a.font_size * CELL_W))
         if a.scene:  # frames drawn in code (scenes.py); --seed varies them, --fps keeps the loop length
             src = timeline(scenes.frames(a.scene, a.seed, a.fps), 0, 0, None, a.max_frames)
         else:
@@ -421,6 +422,7 @@ def main(argv=None):
         if footage and a.steady and len(images) > 1:
             images = steady(images, a.steady)
         lut = shared_lut(images) if footage else list(range(256)) * 3
+        photos = images  # for --under: the frames as they are, before the tonal stretch
         images = [im.point(lut) for im in images]
         if footage and a.subject and len(images) > 1:
             still = background(images, a.subject_cut)
@@ -438,7 +440,7 @@ def main(argv=None):
                     a.bg = bg = "white" if ImageStat.Stat(still.convert("L")).mean[0] > 128 else "black"
                     back = rgb(bg)
                 fill = Image.new("RGB", still.size, tuple(255 - v for v in back) if a.invert else back)
-                images = [Image.composite(im, fill, m) for im, m in zip(images, masks)]
+                images = photos = [Image.composite(im, fill, m) for im, m in zip(images, masks)]
         cut = None
         if a.mode == "braille" and not a.dither and len(images) > 1:  # one dot threshold, so dots hold still
             lum = min(1, a.brightness * sum(ImageStat.Stat(im.convert("L")).mean[0] for im in images) / len(images) / 255)
@@ -447,7 +449,8 @@ def main(argv=None):
         def look(im, palette):
             return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
-                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut)  # same seed: same layout
+                           words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut,  # same seed: same layout
+                           over_photo=bool(a.under))
 
         pal = a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker
@@ -458,12 +461,17 @@ def main(argv=None):
             pal = sorted({c[2] for row in look(sheet, pal) for c in row if len(c) == 3}) or pal
         grids = [look(im, pal) for im in images]
         if a.effect:
-            if len(grids) > 1:
-                raise ValueError("--effect needs a still image, not an animation")
+            moving = len(grids) > 1
+            if moving and a.effect != "dust":
+                raise ValueError("--effect %s needs a still image; only dust also works on an animation" % a.effect)
             if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
-                grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in grids[0]]], None
-            grids = effects.frames(grids[0], a.effect, bg=back)
-            durs = [1000 / effects.FPS] * len(grids)
+                grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in g] for g in grids], None
+            if moving:  # the animation keeps playing under the dust, at its own frame times
+                grids = effects.frames(grids[0], a.effect, bg=back, seq=grids)
+                durs = [durs[i % len(durs)] for i in range(len(grids))]
+            else:
+                grids = effects.frames(grids[0], a.effect, bg=back)
+                durs = [1000 / effects.FPS] * len(grids)
         hold = a.hold if a.hold is not None else 1.5 if a.effect and a.effect not in effects.LOOPS else 0
         durs[-1] += hold * 1000
         if ext in (".gif", ".webp", ".mp4"):
@@ -472,7 +480,12 @@ def main(argv=None):
             if size > MAX_BYTES:
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap) for g in grids]
+            unders = [None] * len(grids)
+            if a.under:  # the photo behind the glyphs
+                soft = [underlay(im, bg, a.under) for im in photos]
+                unders = [soft[min(i, len(soft) - 1)] for i in range(len(grids))]  # an effect reuses its one still
+            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, u)
+                   for g, u in zip(grids, unders)]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps, a.crf)
             else:

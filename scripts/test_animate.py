@@ -101,6 +101,29 @@ main([still, "--effect", "decode", "--mode", "halfblock", "-w", "10", "-o", os.p
 fx = Image.open(os.path.join(tmp, "fx.gif"))
 assert fx.n_frames > 10 and fx.info.get("loop") == 0
 
+# --under draws the photo behind the glyphs: with only spaces (-c "  "), the frame is the dimmed photo, not the page.
+under = os.path.join(tmp, "under.webp")
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--effect", "shimmer", "-w", "10", "-c", "  ", "--under", "0.5", "-o", under])
+r, g, b = Image.open(under).convert("RGB").getpixel((5, 5))
+assert 90 <= r <= 110 and 50 <= g <= 70 and b <= 30, (r, g, b)  # half of (200, 120, 40) over black
+for bad in (["--under", "2"], ["--under", "0.5", "-o", os.path.join(tmp, "u.html")]):
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            main([still, "-w", "10"] + bad + ([] if "-o" in bad else ["-o", under]))
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("bad --under must fail: %s" % bad)
+# --style works as in ascii.py: here square 10 px cells over the photo at 0.9. The HTML player has no photo.
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--style", "diamond", "-c", "  ", "-w", "10", "-o", under])
+    main([still, "--style", "diamond", "-w", "10", "-o", os.path.join(tmp, "style.html")])
+styled = Image.open(under).convert("RGB")
+r, g, b = styled.getpixel((5, 5))
+assert styled.size == (100, 80) and 170 <= r <= 190 and 98 <= g <= 118 and b <= 46, (styled.size, r, g, b)
+assert "◇" in open(os.path.join(tmp, "style.html"), encoding="utf-8").read()
+
 
 def player_durs(args):
     path = os.path.join(tmp, "durs.html")

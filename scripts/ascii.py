@@ -10,6 +10,7 @@
     uv run scripts/ascii.py photo.jpg -o art.png --fg matrix
 """
 import argparse
+import base64
 import collections
 import functools
 import html
@@ -18,7 +19,7 @@ import os
 import random
 import sys
 
-from PIL import Image, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 # Ramps go from densest to emptiest glyph.
 CHARSETS = {
@@ -29,7 +30,21 @@ CHARSETS = {
     "minimal": "#+. ",
     "binary": "10 ",
     "dots": "⣿⣷⣯⣟⡿⢿⣻⣽⣾⣶⣦⣤⣀⡀ ",
+    # The --style ramps: bright cells get the heaviest glyph and dark cells get none, so the photo shows there.
+    "characters": "@#08SXx+=-  ",
+    "lines": "┃┃╏╹'  ",
+    "diagonal": "╲╲//′  ",
+    "diamond": "◆◆◆◇◇◇  ",
+    "dot": "●●●••·  ",
+    "cross": "✖✖✖✕✕×  ",
 }
+# --style NAME: that ramp over the dimmed photo. For a picture it also sets (aspect, font size, columns):
+# letters get room around them, dashes get a gap between rows, and symbols sit on a square grid.
+STYLES = {"characters": (0.75, 16, 120), "lines": (0.4, 12, 160), "diagonal": (0.5, 12, 160),
+          "diamond": (1.0, 16, 120), "dot": (1.0, 16, 120), "cross": (1.0, 16, 120)}
+STYLE_UNDER = 0.9  # how strong the photo shows under a style
+PHOTO_INK = 1.35  # over the photo a glyph is this much brighter than its own pixel (on a light page: darker), so it glows
+SYMBOLS = set("◆◇●•·✖✕×")  # no taller than wide, so they fill a square cell at full size
 COLORS = {"matrix": "#00ff41", "amber": "#ffb000", "cyan": "#00e5ff", "magenta": "#ff3df2", "mint": "#9dffb0"}
 # Monospace first, then fonts that cover braille and other symbols.
 FONTS = ["Menlo.ttc", "DejaVuSansMono.ttf", "consola.ttf", "LiberationMono-Regular.ttf", "cour.ttf",
@@ -83,9 +98,44 @@ def dither_levels(levels, width, top):
                 levels[i + off] += err * w / 16
 
 
+def value_hist(img):
+    """Histogram (256 counts) of each RGB pixel's brightest channel."""
+    r, g, b = img.split()
+    return ImageChops.lighter(ImageChops.lighter(r, g), b).histogram()
+
+
+def stretch_lut(h, cutoff=1):
+    """Autocontrast as a lookup table for img.point. `h` is the histogram of each pixel's brightest channel
+    (value_hist), so a flat color stays as it is, the brightest channel just reaches 255, and one curve serves
+    R, G and B, so hues stay. `cutoff` is the percent of pixels clipped at each end."""
+    cut, acc, lo, hi = sum(h) * cutoff // 100, 0, 0, 255
+    for lo in range(256):
+        acc += h[lo]
+        if acc > cut:
+            break
+    acc = 0
+    for hi in range(255, -1, -1):
+        acc += h[hi]
+        if acc > cut:
+            break
+    if hi <= lo:
+        return list(range(256)) * 3
+    return [min(255, max(0, round((v - lo) * 255 / (hi - lo)))) for v in range(256)] * 3
+
+
+def flatten(img, back):
+    """Any image as plain RGB: transparency becomes the `back` color."""
+    if img.mode.startswith(("I", "F")):  # 16/32-bit grayscale: stretch its real range to 8-bit
+        img = img.convert("F")
+        lo, hi = img.getextrema()
+        img = img.point(lambda v: (v - lo) * 255 / ((hi - lo) or 1)).convert("L")
+    img = img.convert("RGBA")
+    return Image.alpha_composite(Image.new("RGBA", img.size, back + (255,)), img).convert("RGB")
+
+
 def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1.0,
             invert=False, dither=False, bg="black", mode="ramp", sharpen=False, autocontrast=True,
-            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None):
+            words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None, over_photo=False):
     """Return rows of (char, (r, g, b)) cells. `aspect` is char width / char height.
 
     mode "shape" maps brightness like "ramp", then gives each cell with an edge the ASCII symbol whose
@@ -98,6 +148,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     Glyphs are random from `seed`, or ramp glyphs when `charset` is given.
     autocontrast=False skips the per-image tonal stretch (animate.py applies one shared stretch).
     `cut` (0-1) sets the braille dot threshold; animate.py passes one for the whole clip.
+    over_photo=True is for glyphs drawn over the photo (see `underlay`): each ink keeps its pixel's own
+    color, a little brighter than the dimmed photo. Without it every ink is made bright enough to read on a flat page.
     """
     ramp = CHARSETS.get(charset or "standard", charset)
     if len(ramp) < 2:
@@ -110,15 +162,9 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         raise ValueError("mode must be one of: " + ", ".join(SUBPIXELS))
     sx, sy = SUBPIXELS[mode]
     back = rgb(bg)
-    if img.mode.startswith(("I", "F")):  # 16/32-bit grayscale: stretch its real range to 8-bit
-        img = img.convert("F")
-        lo, hi = img.getextrema()
-        img = img.point(lambda v: (v - lo) * 255 / ((hi - lo) or 1)).convert("L")
-    img = img.convert("RGBA")
-    flat = Image.new("RGBA", img.size, back + (255,))
-    img = Image.alpha_composite(flat, img).convert("RGB")  # transparency becomes background
+    img = flatten(img, back)
     if autocontrast:
-        img = ImageOps.autocontrast(img, cutoff=1)  # use the full tonal range, so dim photos still read
+        img = img.point(stretch_lut(value_hist(img)))  # use the full tonal range, so dim photos still read
     img = ImageEnhance.Brightness(ImageEnhance.Contrast(img).enhance(contrast)).enhance(brightness)
 
     rows = round(width * img.height / img.width * aspect)
@@ -165,8 +211,15 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         else:
             ch = chars[i]
         c = raw[i * 3:i * 3 + 3]
+        if over_photo:
+            k = PHOTO_INK if dark_bg else 1 / PHOTO_INK
+            cells.append((ch, tuple(min(255, round(v * k)) for v in c)))
+            continue
         # The glyph already shows brightness, so keep the hue but make the ink readable on the background.
         peak = max(c) or 1
+        if dark_bg and peak < 64:  # a near-black pixel's hue is mostly noise: fade it to gray before brightening
+            m, k = sum(c) / 3, peak / 64
+            c = [m + (v - m) * k for v in c]
         scale = max(peak, 200) / peak if dark_bg else min(peak, 150) / peak
         cells.append((ch, tuple(min(255, round(v * scale)) for v in c)))
     return [cells[r * width:(r + 1) * width] for r in range(rows)]
@@ -339,14 +392,19 @@ def _html_run(style, run, boxed=False):
     return '<span style="%s">%s</span>' % (style, text) if style else text
 
 
-def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
+def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, under=None):
     """`gap` (px) leaves a border of page background around each background cell, for a tile look.
     A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows.
-    Glyphs shrink to fit short cells, as in to_png; then each glyph sits centred in its own cell-wide box."""
+    Glyphs shrink to fit short cells, as in to_png; then each glyph sits centred in its own cell-wide box.
+    A grid of only symbols keeps its glyph size, as in to_png, and always gets the boxes, because browsers
+    draw symbols with a fallback font of another width.
+    `under` is an image drawn behind the glyphs, stretched to fit, as in to_png."""
     back = "transparent" if bg == "none" else "#%02x%02x%02x" % rgb(bg)
     cw = font_size * CELL_W  # cell width in px
-    size = min(font_size, round(cw / aspect / 1.2))  # glyph px
-    boxed = size < font_size
+    chars = {c[0] for row in grid for c in row} - {" "}
+    symbols = bool(chars) and chars <= SYMBOLS
+    size = font_size if symbols else min(font_size, round(cw / aspect / 1.2))  # glyph px
+    boxed = symbols or size < font_size
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     shadow = "#000" if bg == "none" else back
     if not (gx or gy):
@@ -376,12 +434,18 @@ def to_html(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
         lines.append("".join(parts))
     lh = cw / aspect / size  # in em of the glyph font
     box = ("%.3f" % (cw / size), "text-align:center;") if boxed else (CELL_W, "")
+    photo = ""
+    if under:  # a small JPEG in the page itself; the <pre> shrinks to the art, so the photo fits it exactly
+        data = io.BytesIO()
+        under.convert("RGB").resize((len(grid[0]) * 4, len(grid) * round(4 / aspect))).save(data, "JPEG", quality=80)
+        photo = (";display:inline-block;background:url(data:image/jpeg;base64,%s) 0 0/100%% 100%% content-box no-repeat"
+                 % base64.b64encode(data.getvalue()).decode())
     # Spans fill the whole line height, so cell backgrounds meet with no gap between rows.
     return ('<!doctype html><meta charset="utf-8"><title>ASCII art</title>\n'
             '<style>pre span{display:inline-block;vertical-align:top;height:%.3fem}'
             'pre i{display:inline-block;width:%sem;%sfont-style:normal}</style>\n'
             '<body style="margin:0;background:%s"><pre style="margin:0;padding:16px;font:%dpx/%.3f Menlo,Consolas,'
-            '\'DejaVu Sans Mono\',monospace">%s</pre></body>\n') % ((lh,) + box + (back, size, lh, "\n".join(lines)))
+            '\'DejaVu Sans Mono\',monospace%s">%s</pre></body>\n') % ((lh,) + box + (back, size, lh, photo, "\n".join(lines)))
 
 
 def _render(f, ch):
@@ -409,17 +473,31 @@ def _braille(ch):
     return "\u2800" <= ch <= "\u28ff"
 
 
-def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
+def _ink_offset(f, ch):
+    """(dx, dy) in whole px that moves `ch`, drawn with anchor "mm", so its ink is centred on the anchor point.
+    Fonts set symbols a little below the middle of the line, which shows when they fill a square cell."""
+    s = 2 * f.size
+    im = Image.new("L", (2 * s, 2 * s))
+    ImageDraw.Draw(im).text((s, s), ch, font=f, fill=255, anchor="mm")
+    left, top, right, bottom = im.getbbox() or (s, s, s, s)
+    return round(s - (left + right) / 2), round(s - (top + bottom) / 2)
+
+
+def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, under=None):
     """`gap` (px) leaves a border of background around each background cell, for a tile look.
-    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows."""
+    A pair (x, y) sets each side; (0, y) keeps a word's box whole and only parts the rows.
+    `under` is an image drawn behind the glyphs instead of the flat background, stretched to fit."""
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     cw = max(1, round(font_size * CELL_W))
     chh = max(1, round(cw / aspect))  # cell shape matches the aspect used to sample the image
     dot = max(1, round(min(cw / 2, chh / 4)))  # braille dot size in px
     glyphs = {c[0] for row in grid for c in row if c[0] not in SHADES and c[0] != HALF and not _braille(c[0])}
     f = font(min(font_size, round(chh / 1.2)), "".join(glyphs))  # glyphs shrink to fit short cells (square tiles)
+    big = font(font_size, "".join(glyphs))  # symbols do not: they fill a square cell at full size, centred by their ink
+    nudge = {ch: _ink_offset(big, ch) for ch in glyphs & SYMBOLS}
     mode, back = ("RGBA", (0, 0, 0, 0)) if bg == "none" else ("RGB", rgb(bg))
-    img = Image.new(mode, (len(grid[0]) * cw, len(grid) * chh), back)
+    size = (len(grid[0]) * cw, len(grid) * chh)
+    img = Image.new(mode, size, back) if under is None else under.convert(mode).resize(size, Image.LANCZOS)
     draw = ImageDraw.Draw(img)
     for y, row in enumerate(grid):
         for x, (ch, c, *under) in enumerate(row):
@@ -429,10 +507,10 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
                                        radius=_corner(cw, min(gx, gy)), fill=under[0])
                 if ch != " ":
                     draw.text((x * cw + cw / 2, y * chh + chh / 2), ch, font=f, fill=c, anchor="mm")
-            elif under:  # halfblock: top half is the ink, bottom half the cell background
+            elif under:  # halfblock: top half is the ink, bottom half the cell background; a gap parts all pixels
                 mid = y * chh + chh // 2
-                draw.rectangle((x * cw, y * chh, (x + 1) * cw - 1, mid - 1), fill=c)
-                draw.rectangle((x * cw, mid, (x + 1) * cw - 1, (y + 1) * chh - 1), fill=under[0])
+                draw.rectangle((x * cw + gx, y * chh + gy, (x + 1) * cw - 1 - gx, mid - 1 - gy), fill=c)
+                draw.rectangle((x * cw + gx, mid + gy, (x + 1) * cw - 1 - gx, (y + 1) * chh - 1 - gy), fill=under[0])
             elif ch in SHADES:
                 k = SHADES[ch]
                 fill = ink + (round(255 * k),) if mode == "RGBA" else tuple(round(b + (i - b) * k) for b, i in zip(back, ink))
@@ -441,13 +519,26 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0):
                 for dy, dx in ((dy, dx) for dy in range(4) for dx in range(2) if ord(ch) & BRAILLE[dy][dx]):
                     cx, cy = round(x * cw + (dx + 0.5) * cw / 2 - dot / 2), round(y * chh + (dy + 0.5) * chh / 4 - dot / 2)
                     draw.ellipse((cx, cy, cx + dot - 1, cy + dot - 1), fill=ink)
+            elif ch in nudge:
+                dx, dy = nudge[ch]
+                draw.text((x * cw + cw / 2 + dx, y * chh + chh / 2 + dy), ch, font=big, fill=ink, anchor="mm")
             elif ch != " ":
                 draw.text((x * cw + cw / 2, y * chh + chh / 2), ch, font=f, fill=ink, anchor="mm")
     return img
 
 
+def underlay(img, bg, strength):
+    """The photo to draw behind the glyphs (the `under` of to_png and to_html): the original picture, untouched,
+    only dimmed toward the page. `strength` (0-1) is how much of the photo shows; 1 is the photo as it is."""
+    back = rgb(bg)
+    return Image.blend(Image.new("RGB", img.size, back), flatten(img, back), strength)
+
+
 def add_poster_args(p):
-    """Words and tiles options, shared with animate.py."""
+    """Style, words and tiles options, shared with animate.py."""
+    p.add_argument("--style", choices=STYLES, help="the photo look: small glyphs in the photo's colors over the "
+                   "dimmed photo. Sets -c, and for a picture -w, --aspect, --font-size and --under %g, unless you give them"
+                   % STYLE_UNDER)
     p.add_argument("--words", default=WORDS, help="words mode: vocabulary, space or comma separated")
     p.add_argument("--seed", type=int, default=0, help="words/tiles: seed for the layout or glyphs (default 0)")
     p.add_argument("--accent", help="words mode: box color for the most colorful words, e.g. #f28c28")
@@ -457,11 +548,17 @@ def add_poster_args(p):
 
 def poster_defaults(a, image):
     """Fill options left unset. Tiles: square cells, big glyphs, a thin gap. Words and tiles: a charcoal page.
+    A style: its ramp, and for a picture its cell shape, glyph size and columns, over the photo.
     Words: the gap only parts stacked rows, so a word's box stays whole. Text stays at aspect 0.5,
     because a terminal char is twice as tall as it is wide."""
     tiles = a.mode == "tiles"
     defaults = {"aspect": 1.0 if tiles and image else 0.5, "font_size": 80 if tiles else 12,
                 "bg": POSTER_BG if a.mode in ("words", "tiles") else "black"}
+    if a.style:
+        defaults["charset"] = a.style
+        if image:  # text keeps the terminal's cell shape and has no photo under it
+            defaults["aspect"], defaults["font_size"], defaults["width"] = STYLES[a.style]
+            defaults["under"] = STYLE_UNDER
     for k, v in defaults.items():
         if getattr(a, k) is None:
             setattr(a, k, v)
@@ -475,7 +572,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Turn an image into ASCII art.")
     p.add_argument("image", help="image path, or - for stdin")
     p.add_argument("-o", "--output", help="write .txt, .html, .png, .jpg or .webp; default prints to stdout")
-    p.add_argument("-w", "--width", type=int, default=100, help="columns, 1-%d (default 100)" % MAX_SIDE)
+    p.add_argument("-w", "--width", type=int, help="columns, 1-%d (default 100)" % MAX_SIDE)
     p.add_argument("-c", "--charset",
                    help="%s, or your own ramp from dense to empty (default standard; tiles: random glyphs)"
                    % ", ".join(CHARSETS))
@@ -495,25 +592,34 @@ def main(argv=None):
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--gap", type=int, help="PNG/HTML: px of background around each background cell (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
+    p.add_argument("--under", type=float, metavar="0-1", help="PNG/HTML: draw the original photo behind the "
+                   "glyphs; the number is how strong it shows (try 0.5)")
     add_poster_args(p)
     a = p.parse_args(argv)
     ext = os.path.splitext(a.output or "")[1].lower()
-    poster_defaults(a, ext not in ("", ".txt"))
     if ext not in ("", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp"):
         p.error("unknown output extension %r: use .txt, .html, .png, .jpg or .webp" % ext)
-    if a.font_size < 1:
-        p.error("--font-size must be at least 1")
+    if a.under and ext in ("", ".txt"):
+        p.error("--under needs .png, .jpg, .webp or .html output")
+    poster_defaults(a, ext not in ("", ".txt"))
+    if a.width is None:
+        a.width = 100
+    if a.font_size < 1 or not 0 <= (a.under or 0) <= 1:
+        p.error("need --font-size >= 1 and --under 0-1")
     try:
-        grid = convert(load(a.image), a.width, a.charset, a.aspect, a.contrast, a.brightness,
+        img = load(a.image)
+        grid = convert(img, a.width, a.charset, a.aspect, a.contrast, a.brightness,
                        a.invert, a.dither, "black" if a.bg == "none" else a.bg, a.mode, a.sharpen,
-                       words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level, palette=a.palette)
+                       words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level, palette=a.palette,
+                       over_photo=bool(a.under))
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
+        under = underlay(img, "black" if a.bg == "none" else a.bg, a.under) if a.under else None
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
-            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap)
+            img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap, under)
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
             with open(a.output, "w", encoding="utf-8") as out:
-                out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap))
+                out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap, under))
         else:
             text = to_ansi(grid, fg) if a.color else to_text(grid)
             if a.output:
