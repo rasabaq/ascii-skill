@@ -1,6 +1,6 @@
 ---
 name: ascii-art
-description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also draws a photo as small glowing glyphs over the photo itself (characters, lines, diagonal strokes, diamonds, dots, crosses), or as a mosaic. Also animates still images with matrix-rain, decode, scan, glitch, wave, shimmer and dust effects. Also makes ASCII art or animation from a short description with no image at all, such as "seaweed" or "a running horse", by drawing it in code or using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, a "matrix" / retro text look, or art that crumbles, decays or blows away as dust.
+description: Turn any image, GIF or video into ASCII art or ASCII animation, as plain text, truecolor terminal output, HTML, PNG, GIF, WebP or MP4. Also draws a photo as small glowing glyphs over the photo itself (characters, lines, diagonal strokes, diamonds, dots, crosses), or as a mosaic. Also animates still images with matrix-rain, decode, scan, glitch, wave, shimmer and dust effects. Also makes ASCII art or animation from a short description with no image at all, such as "seaweed" or "a running horse", by drawing it in code or using a freely licensed clip from Wikimedia Commons. Use when the user asks for ASCII art, an ASCII animation or video, a text-art version of an image, a terminal banner from a logo, a "matrix", CRT, VHS, retro console (C64, PICO-8, Game Boy), LED board or halftone look, or art that crumbles, decays or blows away as dust.
 ---
 
 # ASCII art
@@ -35,8 +35,11 @@ Paths below are relative to this skill's folder.
 | `--color` | Truecolor ANSI escape codes in text output (stdout or `.txt`). Uses `--fg` if given, else photo colors. |
 | `--invert` | Swap light and dark. |
 | `--contrast 1.0` `--brightness 1.0` | Factors on top of the automatic contrast stretch. `1.0` means no change. |
-| `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. |
-| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). |
+| `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. Put it after the image path (`--dither photo.jpg` reads the path as a dither name). |
+| `--dither bayer` | Ordered dithering with a fixed 8x8 pattern: the classic retro crosshatch. The pattern stays put from frame to frame, so it is safe for animation. With `--colors` it also dithers the colors. |
+| `--colors pico8` | Snap every color to a retro palette: `c64`, `pico8`, `gameboy` (4 greens), `cga` (black, cyan, magenta, white), `zx` (ZX Spectrum), `mono` (black and white), and two gradient maps: `matrix` (greens) and `vaporwave` (purple to peach). See "Retro palettes". |
+| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). |
+| `--backdrop 0.35` | Ramp, shape and braille: each cell gets a background of its own color at this strength (0-1), so color fields read. Best for paintings and color photos. |
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
 | `--font-size 12` | Glyph size in px for PNG/HTML. |
@@ -57,6 +60,7 @@ The script already stretches every image to its full tonal range, so most images
 - Want more detail at the same width: `--mode braille --dither --sharpen` for line-art style, `--mode halfblock` for a color photo.
 - Too much noise: use fewer columns or a shorter ramp (`-c minimal`).
 - Banding in gradients: add `--dither`.
+- Paintings and color photos look dim in ramp, shape or braille: glyphs cover little of each cell, so color fields fade. Add `--backdrop 0.35`: each cell gets a background of its own color at that strength (0-1), and the glyph stays bright on top. Works in PNG, HTML, GIF, video and the terminal (`--color`).
 - Chat output: never use `--color`, because escape codes show up as junk. Wrap the text in a code block.
 - With `--style`, a dark photo gets only a few glyphs: add `--brightness 1.5`. For more glyphs everywhere, give your own ramp with no spaces at the end, like `-c "◆◆◇◇"`.
 - With `--style`, the photo is too faint or too strong: change `--under` (0.5 is dimmer and makes the glyphs stand out, 1 is the photo as it is).
@@ -65,8 +69,54 @@ The script already stretches every image to its full tonal range, so most images
 ## Modes in short
 
 - `braille` ignores `-c`. Use it with `--dither` for photos and without it for logos. Colors follow the photo, or `--fg`.
-- `halfblock` ignores `-c`, `--dither` and `--fg`, because the colors are the picture. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
+- `halfblock` ignores `-c` and `--fg`, because the colors are the picture. It uses `--dither bayer` only with `--colors`. Plain text (no `--color`) has no colors, so each cell becomes a shade block `█▓▒░` by brightness. `--bg none` does not make it transparent: transparent pixels become black.
 - Terminals draw braille dots small, so braille looks dimmer there than in a PNG.
+- `led` and `dots` draw real round lamps or dots in PNG, GIF, WebP and MP4. Text, terminal and HTML output get the round glyphs `●•·` by size instead. Both ignore `--dither` and `--gap`.
+
+## LED board
+
+`--mode led` draws each cell as one round lamp on a dark board. Lit lamps take the image color (or `--fg`) at a few brightness steps, unlit lamps stay faintly visible, and lit lamps have a soft glow.
+
+```bash
+uv run scripts/ascii.py logo.png --mode led -w 64 -o board.png
+uv run scripts/animate.py --scene planet --mode led -w 64 -o planet.gif
+```
+
+- Defaults: square cells (`--aspect 1`) of 16 px (`--font-size 26`) on black. Text output keeps `--aspect 0.5`.
+- `-c` sets the steps: one lit step per glyph before the last one. The default `●•· ` gives 3 steps; `-c "● "` gives plain on/off lamps.
+- `--fg amber` (or `matrix`, `cyan`, any color) gives a one-color board.
+- Works with `--effect`: `matrix` becomes falling lamps.
+
+## Halftone dots
+
+`--mode dots` is a halftone print: a dot in each cell and one on each cell corner, so the dots sit on a grid turned 45 degrees, as in print. The dot's area matches the ink, so tones stay right when you look from a distance.
+
+```bash
+uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white -o print.png
+uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white --fg black -o newspaper.png
+```
+
+- Defaults: square cells of 12 px (`--font-size 20`) on black. On black, light parts get big dots. On `--bg white`, dark parts do, as on paper.
+- Dot colors come from the image, or all dots are `--fg`.
+- An image with a black background (a scene, a logo) on white paper: add `--invert`. It flips light and dark but keeps the colors, so an orange planet prints as dark orange.
+- Not the same as `-c dots`, which is a braille ramp.
+
+## Retro palettes
+
+`--colors NAME` makes the art look like an old computer or console. Every color is snapped to that machine's palette. Add `--dither bayer` for the classic crosshatch between palette colors.
+
+```bash
+uv run scripts/ascii.py photo.jpg --mode halfblock --colors pico8 --dither bayer -w 120 -o out.png
+uv run scripts/ascii.py photo.jpg --mode halfblock --colors gameboy --dither bayer -o out.png
+uv run scripts/ascii.py photo.jpg -c blocks --colors c64 --dither bayer -o out.png
+uv run scripts/animate.py --scene planet --mode halfblock --colors pico8 --dither bayer -o planet.gif
+```
+
+- `--mode halfblock` gives the most retro look: each half cell is one palette pixel.
+- Without `--dither bayer`, each color goes to the nearest palette color. Plain `--dither` only spreads brightness, not color.
+- The page defaults to the palette's darkest color, such as the Game Boy's dark green. Set `--bg` to change it.
+- PNG, GIF and WebP output add no other colors: glyph edges are not smoothed, and `░▒▓` are drawn as dot patterns.
+- `--fg` is snapped to the palette too. Tiles take their tile colors from the palette. Words mode ignores `--colors`.
 
 ## Photo styles
 
@@ -130,6 +180,27 @@ uv run scripts/ascii.py photo.jpg --mode tiles -w 36 -o poster.png
 
 Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 
+## Looks
+
+`--look NAME` sets a whole recipe of flags in one word. Flags you type as well still win, so `--look matrix -c minimal` keeps the green and the glow but uses the `minimal` ramp. A look's post effects are skipped for text, HTML and terminal output.
+
+| Look | Same as |
+|---|---|
+| `matrix` | `-c 01 --colors matrix --contrast 1.25 --post scan,bloom,vignette`: every cell a `0` or `1`, the tone in 7 greens |
+| `vaporwave` | `--mode halfblock --colors vaporwave --dither bayer --contrast 1.15 --post chroma,scan,bloom,vignette`: purple shadows, pink and peach highlights |
+| `terminal` | `-c terminal --fg amber --post crt` |
+| `noir` | `-c standard --fg "#ece9e2" --contrast 1.3 --post grain,vignette` |
+| `vhs` | `--mode halfblock --post chroma,scan,grain,vignette` |
+| `c64`, `pico8`, `gameboy` | `--mode halfblock --colors NAME --dither bayer` |
+| `scoreboard` | `--mode led --fg amber` |
+| `newspaper` | `--mode dots --bg white --fg black` (add `--invert` for art on a black background, such as a scene) |
+
+```bash
+uv run scripts/ascii.py photo.jpg --look noir -w 140 -o noir.png
+uv run scripts/animate.py --scene rain --look matrix -o matrix.mp4
+uv run scripts/animate.py --scene tree --look gameboy -o tree.gif
+```
+
 ## Presets
 
 - Matrix: `-c binary --fg matrix --glow 0.8 -o out.png`
@@ -145,10 +216,28 @@ Preset: `--mode words -w 110 --font-size 16 --accent "#f28c28" -o poster.png`
 - Mosaic: `--mode halfblock --gap 1 --font-size 24 -w 96 -o out.png`
 - Pixel art: `--mode halfblock -w 120 -o out.png`
 - Moving glyphs over a photo: `uv run scripts/animate.py photo.jpg --style characters --effect shimmer -o out.mp4`
+- PICO-8 look: `--mode halfblock --colors pico8 --dither bayer -o out.png`
+- LED board: `--mode led -w 64 -o board.png`
+- Newspaper print: `--mode dots -w 90 --bg white --fg black -o print.png`
+
+### Post effects
+
+`--post LIST` adds screen effects to PNG, JPG and WebP from `ascii.py`, and to GIF, WebP and MP4 from `animate.py`. LIST is comma separated:
+
+- `crt`: a curved screen with rounded dark corners, plus scan lines, a soft vignette and a light glow. The full retro monitor.
+- `scan`: thin dark lines between scan lines. They line up with the text rows, so they never beat against the glyphs.
+- `bloom`: bright glyphs glow. The glyphs stay sharp.
+- `chroma`: red and blue fringes that grow toward the edges. The centre stays clean.
+- `vignette`: darker corners.
+- `grain`: fine film grain, strongest in mid tones. Pure black stays black.
+
+The order you type does not matter. Every effect is the same in each frame, so still areas never flicker; the grain does not move. Transparency becomes black. Effects show best on bright art and colour photos (`--mode halfblock`); on a black page, scan lines and vignette only show on the glyphs.
+
+Preset: `--mode halfblock -w 120 --post crt -o tv.png`
 
 ## Animation
 
-`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--glow`, `--style`, `--under`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
+`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--glow`, `--style`, `--under`, `--colors`, `--dither`, `--look`, `--backdrop`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
 
 ```bash
 uv run scripts/animate.py cat.gif                          # play in the terminal, Ctrl-C stops
@@ -164,7 +253,7 @@ uv run scripts/animate.py photo.jpg --effect decode --hold 0 -o intro.mp4   # no
 - One tonal range (and in braille one dot threshold) is used for all frames, so brightness does not pump.
 - Still areas do not flicker: a pixel keeps its value until it changes by more than `--steady` (default 6, out of 255). Raise it to 16 or more for grainy film. `--steady 0` turns it off.
 - Interlaced video is deinterlaced, and video with non-square pixels keeps its real shape.
-- Avoid `--dither` for animation: it makes the glyphs crawl from frame to frame.
+- Avoid plain `--dither` for animation: it makes the glyphs crawl from frame to frame. `--dither bayer` holds still.
 - GIF cannot play faster than about 50 fps, so fast video drops some frames in `.gif`. Use `.mp4` or `.webp` for smooth 60 fps.
 - `--hold SECONDS` keeps the last frame on screen that long before the loop starts again (default 0, or 1.5 for the `matrix`, `decode` and `scan` effects).
 - `.mp4` is tagged as BT.709, so browsers show the exact `--bg` color and the video blends into a page of the same color. `--crf` sets the quality (default 23; lower is sharper and bigger). With `--font-size` 16 or more, 28 still looks clean and is about 30% smaller.
@@ -223,11 +312,11 @@ uv run scripts/animate.py clip.mp4 --style lines -o out.mp4                     
 
 ### Scenes
 
-`--scene NAME` draws a looping animation in code, so no input file is needed. Each loop is 2 to 3.2 seconds, and the last frame flows into the first. Every mode, color option and output works. `--seed N` gives another variant (fire, waves, stars, rain), and `--fps` changes smoothness but keeps the loop length.
+`--scene NAME` draws a looping animation in code, so no input file is needed. Each loop is 2 to 3.2 seconds, and the last frame flows into the first. Every mode, color option and output works. `--seed N` gives another variant (fire, waves, stars, rain, city, tree, planet), and `--fps` changes smoothness but keeps the loop length.
 
 ```bash
 uv run scripts/animate.py --scene fire -o fire.gif                       # rising flames, warm colors
-uv run scripts/animate.py --scene donut -o donut.gif                     # a spinning, lit, frosted donut
+uv run scripts/animate.py --scene donut -o donut.gif                     # a frosted donut with sprinkles, spinning
 uv run scripts/animate.py --scene cube --mode braille -o cube.gif        # a tumbling cube with bright edges
 uv run scripts/animate.py --scene waves --mode halfblock -o waves.gif    # ocean swell under the moon
 uv run scripts/animate.py --scene stars -o stars.gif                     # flying through a starfield
@@ -236,6 +325,10 @@ uv run scripts/animate.py --scene rain --mode braille -o rain.gif        # rain 
 uv run scripts/animate.py --scene bounce --mode halfblock -o ball.gif    # a ball that squashes as it bounces
 uv run scripts/animate.py --scene text --mode halfblock -o text.gif      # the word ASCII riding a rainbow wave
 uv run scripts/animate.py --scene flower -o flower.gif                    # a flower breathing open and closed
+uv run scripts/animate.py --scene city --mode halfblock -o city.gif      # night skyline in parallax, a train on a bridge
+uv run scripts/animate.py --scene tree --mode halfblock -o tree.gif      # an autumn tree swaying, leaves falling
+uv run scripts/animate.py --scene planet --mode halfblock -o planet.gif  # a ringed planet with turning bands and two moons
+uv run scripts/animate.py --scene gears --mode braille -o gears.gif      # a clockwork: meshing gears, pendulum, escapement
 ```
 
 - Use `-w 60` to `-w 100`. `--mode halfblock` gives the best color; `--mode braille` gives the crispest lines.
@@ -325,8 +418,13 @@ from ascii import convert, to_text, to_png
 grid = convert(Image.open("cat.jpg"), width=80, charset="blocks", dither=True)
 # Cells are (char, (r, g, b)). With mode="halfblock" they are (char, top_rgb, bottom_rgb).
 # With mode="tiles", tile cells are (char, ink_rgb, tile_rgb).
+# With mode="led" or "dots", pass the same mode to to_png to draw lamps or dots.
 print(to_text(grid))
 to_png(grid).save("cat_ascii.png")
+
+from ascii import snap_grid  # retro palette, as --colors c64 --dither bayer
+retro = snap_grid(convert(Image.open("cat.jpg"), width=80, dither="bayer"), "c64", ordered=True)
+to_png(retro, pure=True).save("cat_c64.png")  # pure: no blended edges, so only palette colors
 
 from effects import frames  # list of grids; the last one is `grid`
 intro = [to_png(g) for g in frames(grid, "decode")]

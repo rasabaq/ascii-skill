@@ -25,8 +25,11 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, poster_defaults, rgb, stretch_lut, to_ansi, to_png, underlay, value_hist)
+                   POSTER_BG, RETRO, parse_look, poster_defaults, rgb, snap_grid, stretch_lut, to_ansi, to_png, underlay,
+                   value_hist)
+from ascii import snap as snap_color  # noqa: E402  (this file's own snap() rounds frame times)
 import effects  # noqa: E402
+import post  # noqa: E402
 import scenes  # noqa: E402
 
 MARK = "\ue000"  # private-use char: never in a ramp, 3 bytes in UTF-8. MARK + 3 hex = new ink color.
@@ -280,6 +283,21 @@ def snap(images, durs, unit, least):
     return keep, [(b - a) * unit for a, b in zip(starts, starts[1:])]
 
 
+def one_palette(images, budget=4_000_000):
+    """GIF: map every frame to one shared 256-color palette, with no dither. A pixel that does not change
+    keeps its palette entry, so still areas never flicker (Pillow would pick a new palette per frame).
+    The palette comes from a sheet of up to 16 frames, scaled with nearest so it only holds real colors."""
+    pick = images[::max(1, len(images) // 16)]
+    w, h = pick[0].size
+    k = min(1, (budget / (w * h * len(pick))) ** 0.5)
+    sw, sh = max(1, round(w * k)), max(1, round(h * k))
+    sheet = Image.new("RGB", (sw, sh * len(pick)))
+    for i, im in enumerate(pick):
+        sheet.paste(im.convert("RGB").resize((sw, sh), Image.Resampling.NEAREST), (0, i * sh))
+    pal = sheet.quantize(256)
+    return [im.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE) for im in images]
+
+
 def to_mp4(images, durs, path, fps, crf=23):
     """Constant-rate H.264: each frame is repeated to fill its duration on a 1/fps grid.
     Converted and tagged as BT.709, so browsers show the exact --bg color (untagged video shifts it).
@@ -339,19 +357,22 @@ def main(argv=None):
     p.add_argument("-o", "--output", help="write .gif, .webp, .mp4 or .html; default plays in the terminal")
     p.add_argument("-w", "--width", type=int, help="columns (default 100; terminal: fit the window)")
     p.add_argument("-c", "--charset", help="%s, or your own ramp (default standard; tiles: random glyphs)" % ", ".join(CHARSETS))
-    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles: 1 for files)")
+    p.add_argument("--aspect", type=float, help="char width / height (default 0.5; tiles, led, dots: 1 for files)")
     p.add_argument("--contrast", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--brightness", type=float, default=1.0, help="1.0 = unchanged")
     p.add_argument("--invert", action="store_true", help="swap light and dark")
-    p.add_argument("--dither", action="store_true", help="Floyd-Steinberg dithering (crawls between frames)")
+    p.add_argument("--dither", nargs="?", const="fs", choices=("fs", "bayer"),
+                   help="Floyd-Steinberg dithering (crawls between frames); --dither bayer holds still")
+    p.add_argument("--colors", choices=RETRO, help="snap every color to this retro palette")
     p.add_argument("--bg", help="black (default; %s in words and tiles mode), white, none (WebP/HTML only), or any color" % POSTER_BG)
     p.add_argument("--fg", help="one ink color: %s, or any color" % ", ".join(COLORS))
-    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4 (default 12; tiles: 80); HTML fills its box's width")
+    p.add_argument("--font-size", type=int, help="glyph size in px for GIF/WebP/MP4 (default 12; tiles: 80; led: 26; "
+                   "dots: 20); HTML fills its box's width")
     p.add_argument("--fps", type=float, help="resample to this frame rate (default: keep source timing)")
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
-    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words or tiles")
+    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led or dots")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image (dust also works on an animation or --scene): %s"
                    % ", ".join(effects.EFFECTS))
@@ -374,7 +395,9 @@ def main(argv=None):
     p.add_argument("--steady", type=float, default=6, help="keep a pixel until it changes by more than this (0-255), "
                    "so video noise does not make still areas flicker (default 6; 0 = off; grainy film: 16)")
     add_poster_args(p)
-    a = p.parse_args(argv)
+    p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
+                   help="GIF/WebP/MP4: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
+    a = parse_look(p, argv, (".gif", ".webp", ".mp4"))
     if bool(a.input) == bool(a.scene):
         p.error("give an input file or --scene NAME (one of: %s)" % ", ".join(scenes.SCENES))
     if a.scene and a.scene.endswith(".py"):
@@ -388,6 +411,8 @@ def main(argv=None):
     ext = os.path.splitext(a.output or "")[1].lower()
     if ext not in ("", ".gif", ".webp", ".mp4", ".html", ".htm"):
         p.error("unknown output extension %r: use .gif, .webp, .mp4 or .html" % ext)
+    if a.post and ext not in (".gif", ".webp", ".mp4"):
+        p.error("--post needs a .gif, .webp or .mp4 output")
     if a.under and ext not in (".gif", ".webp", ".mp4"):
         p.error("--under needs .gif, .webp or .mp4 output")
     poster_defaults(a, bool(ext))
@@ -464,9 +489,9 @@ def main(argv=None):
             return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
                            words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut,  # same seed: same layout
-                           over_photo=bool(a.under))
+                           over_photo=bool(a.under), tone=bool(a.colors), backdrop=a.backdrop)
 
-        pal = a.palette
+        pal = RETRO[a.colors] if a.colors else a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker
             pick = images[::max(1, len(images) // 8)]
             sheet = Image.new("RGB", (pick[0].width, pick[0].height * len(pick)))
@@ -478,7 +503,7 @@ def main(argv=None):
             moving = len(grids) > 1
             if moving and a.effect != "dust":
                 raise ValueError("--effect %s needs a still image; only dust also works on an animation" % a.effect)
-            if fg:  # bake the ink into the cells, so the effect's bright heads and glows still show
+            if fg and a.mode not in ("led", "dots"):  # bake the ink in, so bright heads still show (led/dots: they do)
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in g] for g in grids], None
             if moving:  # the animation keeps playing under the dust, at its own frame times
                 grids = effects.frames(grids[0], a.effect, bg=back, seq=grids)
@@ -486,6 +511,8 @@ def main(argv=None):
             else:
                 grids = effects.frames(grids[0], a.effect, bg=back)
                 durs = [1000 / effects.FPS] * len(grids)
+        if a.colors:  # after the effect, so its glows land on the palette too
+            grids, fg = [snap_grid(g, a.colors, a.dither == "bayer") for g in grids], fg and snap_color(fg, a.colors)
         hold = a.hold if a.hold is not None else 1.5 if a.effect and a.effect not in effects.LOOPS else 0
         durs[-1] += hold * 1000
         if ext in (".gif", ".webp", ".mp4"):
@@ -498,13 +525,14 @@ def main(argv=None):
             if a.under:  # the photo behind the glyphs
                 soft = [underlay(im, bg, a.under) for im in photos]
                 unders = [soft[min(i, len(soft) - 1)] for i in range(len(grids))]  # an effect reuses its one still
-            out = [to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow, u)
+            out = [post.apply(to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow, u,
+                                     a.mode, pure=bool(a.colors)), a.post, max(1, round(cw / a.aspect)))
                    for g, u in zip(grids, unders)]
             if ext == ".mp4":
                 to_mp4(out, durs, a.output, a.fps, a.crf)
             else:
                 # GIF ticks are 10 ms and browsers slow frames under 20 ms, so frames snap to 20 ms or more: 60 fps becomes ~50 fps.
-                out, durs = snap(out, durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
+                out, durs = snap(one_palette(out), durs, 10, 2) if ext == ".gif" else snap(out, durs, 1, 1)
                 out[0].save(a.output, save_all=True, append_images=out[1:], duration=durs, loop=0,
                             **({"lossless": True} if ext == ".webp" else {}))
         elif ext:
