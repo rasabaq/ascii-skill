@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import animate  # noqa: E402
 from ascii import ROUND, SUBPIXELS, convert, main, to_html, to_png, to_text  # noqa: E402
 
-assert {"led", "dots"} <= set(SUBPIXELS)
+assert {"led", "dots", "stipple"} <= set(SUBPIXELS)
 tmp = tempfile.mkdtemp()
 ramp = Image.linear_gradient("L").rotate(90).resize((200, 100)).convert("RGB")  # dark left, bright right
 
@@ -59,6 +59,15 @@ for mode, fs in (("led", 26), ("dots", 20)):
 
 # Transparent background: dots and lamps carry their own alpha.
 assert to_png(grid, "none", mode="dots", aspect=1.0).mode == "RGBA"
+
+# Stipple: same-size dots. White fills the grid, black leaves it empty, a mid gray lights half the cells.
+cells = lambda im: convert(im, 16, aspect=1.0, mode="stipple", autocontrast=False)
+on = lambda g: sum(ch == "●" for row in g for ch, _ in row)
+white, black, gray = (cells(Image.new("RGB", (64, 64), c)) for c in ("white", "black", (128, 128, 128)))
+assert on(white) == 16 * 16 and on(black) == 0 and on(gray) == 16 * 16 // 2, (on(white), on(black), on(gray))
+board = to_png(white, mode="stipple", font_size=14, aspect=1.0)
+assert board.size == (16 * 8, 16 * 8) and board.getpixel((0, 0)) == (0, 0, 0) and board.getpixel((4, 4))[0] > 200
+assert board.crop((0, 0, 8, 8)).tobytes() == board.crop((8, 0, 16, 8)).tobytes(), "every dot is the same disc"
 
 # CLI: square cells for files (16 px lamps, 12 px dots), text keeps aspect 0.5.
 src = os.path.join(tmp, "in.png")

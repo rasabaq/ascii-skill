@@ -74,12 +74,20 @@ for argv in (["--scene", "nope"], [], ["x.gif", "--scene", "cube"], ["--scene", 
     else:
         raise AssertionError(argv)
 # Every example scene file loads, draws, and loops like a built-in scene.
+# macOS AppleDouble sidecars (._koi.py) sit next to the real files and are not Python.
 examples = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples")
-for f in sorted(os.listdir(examples)):
-    if f.endswith(".py"):
+ghost = os.path.join(examples, "._ghost.py")
+with open(ghost, "w") as fh:
+    fh.write("not valid python (\n")
+try:
+    for f in sorted(os.listdir(examples)):
+        if f.startswith("._") or not f.endswith(".py"):
+            continue
         name = load(os.path.join(examples, f))
         seq = SCENES[name](160, 120, 12, 0)
         steps = [diff(a, b) for a, b in zip(seq, seq[1:])]
         assert len(seq) == 12 and min(steps) > 0.05, (f, "every frame moves")
         assert diff(seq[-1], seq[0]) <= 1.5 * max(steps), (f, "loops")
+finally:
+    os.remove(ghost)
 print("ok")

@@ -48,7 +48,9 @@ STYLES = {"characters": (0.75, 16, 120), "lines": (0.4, 12, 160), "diagonal": (0
           "diamond": (1.0, 16, 120), "dot": (1.0, 16, 120), "cross": (1.0, 16, 120)}
 STYLE_UNDER = 0.9  # how strong the photo shows under a style
 PHOTO_INK = 1.35  # over the photo a glyph is this much brighter than its own pixel (on a light page: darker), so it glows
-SYMBOLS = set("◆◇●•·✖✕×")  # no taller than wide, so they fill a square cell at full size
+# Filled marks, plus the same-weight twins shimmer swaps in (♦ for ◆, ◉ for ●, …).
+# None is taller than it is wide, so each one fills a square cell at full size.
+SYMBOLS = set("◆◇●•·✖✕×♦◊◉∙⋅✘✗")
 COLORS = {"matrix": "#00ff41", "amber": "#ffb000", "cyan": "#00e5ff", "magenta": "#ff3df2", "mint": "#9dffb0"}
 # Retro palettes for --colors. C64 is Pepto's measured palette; ZX uses 0xD7 for normal and 0xFF for bright.
 RETRO = {name: tuple(tuple(bytes.fromhex(h)) for h in hexes.split()) for name, hexes in {
@@ -61,6 +63,24 @@ RETRO = {name: tuple(tuple(bytes.fromhex(h)) for h in hexes.split()) for name, h
     "matrix": "001405 00290b 004d14 00801e 00b82a 00ff41 7dffb0",  # no black: a dark-to-phosphor green map
     "vaporwave": "1a0933 3b0f5e 6c1a8c a8259a ff3cac ff7eb6 ffb1a3 ffe3c4",  # no black: a purple-pink-peach gradient map
 }.items()}
+# --gradient NAME: brightness runs through these stops, dark at the first color and bright at the last.
+# Luminance rises along each set, so a bright pixel stays bright and only the hue changes.
+# flare, sunset, neon and horizon are cinematic glows (orange-blue, magenta-gold, cyan-pink, red-sun).
+GRADIENTS = {
+    "matrix": ((0.00, (0, 28, 8)), (0.45, (0, 140, 36)), (1.00, (186, 255, 196))),
+    "amber": ((0.00, (42, 16, 0)), (0.42, (176, 72, 0)), (0.75, (255, 160, 32)), (1.00, (255, 226, 170))),
+    "vapor": ((0.00, (26, 9, 51)), (0.35, (108, 26, 140)), (0.62, (255, 60, 172)),
+              (0.82, (255, 126, 182)), (1.00, (255, 227, 196))),
+    "flare": ((0.00, (6, 10, 36)), (0.28, (16, 48, 140)), (0.48, (40, 110, 220)),
+              (0.68, (255, 92, 18)), (0.86, (255, 168, 48)), (1.00, (255, 244, 224))),
+    "sunset": ((0.00, (18, 6, 36)), (0.30, (120, 16, 72)), (0.52, (220, 36, 96)),
+               (0.74, (255, 96, 32)), (1.00, (255, 196, 120))),
+    "neon": ((0.00, (6, 14, 28)), (0.32, (0, 80, 100)), (0.55, (0, 170, 185)),
+             (0.78, (255, 110, 190)), (1.00, (255, 214, 230))),
+    "horizon": ((0.00, (12, 8, 32)), (0.36, (150, 18, 36)), (0.58, (220, 48, 16)),
+                (0.78, (255, 120, 28)), (1.00, (255, 214, 140))),
+    "signal": ((0.00, (16, 28, 30)), (0.38, (32, 110, 112)), (0.66, (130, 136, 132)), (1.00, (255, 160, 48))),
+}
 # 8x8 Bayer matrix: each step splits every cell into 2x2 in the order 0 2 / 3 1, so thresholds spread evenly.
 BAYER = [[0]]
 for _ in range(3):
@@ -78,13 +98,33 @@ SHADES = {"█": 1.0, "▓": 0.75, "▒": 0.5, "░": 0.25}  # drawn as solid ce
 MAX_SIDE = 1000  # ponytail: hard cap on columns and rows; bigger grids eat GBs and nobody can read them
 CELL_W = 0.6  # monospace advance in em
 SUBPIXELS = {"ramp": (1, 1), "shape": (1, 1), "braille": (2, 4), "halfblock": (1, 2), "words": (1, 1), "tiles": (4, 4),
-             "led": (1, 1), "dots": (1, 1)}  # image pixels per cell (x, y)
+             "led": (1, 1), "dots": (1, 1), "stipple": (1, 1)}  # image pixels per cell (x, y)
 # Shape mode samples each cell as a SHAPE_X x SHAPE_Y grid and gives edge cells the glyph whose ink
 # sits in the same places. Symbols only: letters, brackets and ^~<>` read as noise in photos.
 SHAPE_X, SHAPE_Y = 3, 4
-SHAPE_CHARS = " #%'*+,-./:;=@\\_|"
 SHAPE_EDGE = 0.03  # RMS contrast (0-1) inside a cell above which it counts as an edge
-SHAPE_TONE = 2.0  # weight of the cell's overall brightness against where its ink sits
+# How much a cell's overall brightness counts against where its ink sits. High values pick the glyph
+# with the same amount of ink (a bar became ":") instead of the same stroke.
+SHAPE_TONE = 0.5
+# Stroke masks on that grid, '#' = ink, several per glyph. A stroke can sit high or low in the cell
+# and be one or two samples thick. Measured from the font, a hyphen shrinks to one lit sample, so a
+# horizontal bar matched ":" (the same amount of ink) instead of "-" or "_".
+SHAPE_MASKS = {
+    "-": ("......###...", "...######...", "...###......", "######......", "###.........", "......######"),
+    "_": (".........###", "......######"),
+    "|": (".#..#..#..#.", "##.##.##.##.", ".##.##.##.##", ".#..#..#....", "....#..#..#.",
+          "#..#..#..#..", "..#..#..#..#"),
+    "/": ("..#.#.#..#..", "..#.####.#..", ".....#.#.#..", ".####.#.....", "..#.#.#.....", "..#..#.#.#..", ".#.#..#....."),
+    "\\": ("#...#...#..#", "#..##..##..#", "...#...#...#", "...#..##..##", "#...#...#...", "#..#...#...#", ".#...#..#..."),
+    "+": (".#.###.#..#.", ".#..#.###.#.", ".#.######.#."),
+    "*": ("#.#.#.#.#...", "#.#.#.#.#.#.", "##..####..##"),
+    ".": ("....#..#....", ".......#....", ".#..#......."),
+    "'": (".#..........", ".#..#......."),
+    ",": ("..........#.", ".......#..#."),
+    ":": (".#.....#....",),
+    "=": ("###...###...", "...###...###"),
+    "#": ("############", "#########..."),
+}
 # Braille dot bits by (row, col) inside a cell. Dots 1-3 and 4-6 run down the columns; 7 and 8 were added later.
 BRAILLE = ((0x01, 0x08), (0x02, 0x10), (0x04, 0x20), (0x40, 0x80))
 # Cells are (char, ink) or (char, ink, background): the char drawn in ink on a solid background.
@@ -107,6 +147,7 @@ LED_LAMP = 0.4  # lamp radius as a share of the cell side
 LED_OFF = 0.07  # an unlit lamp sits this far from the board toward white (toward black on a light board)
 LED_GLOW = 0.6  # strength of the soft glow around lit lamps
 DOT_MIN = 0.03  # dots mode: a cell with less ink than this (0-1) gets no dot
+STIPPLE_R = 0.38  # stipple: dot radius as a share of the cell side. Same size in every cell; tone is how many are on
 UNSUPPORTED = {".svg": "SVG is not supported: convert it to PNG first, e.g. rsvg-convert",
                ".heic": "HEIC needs: pip install pillow-heif"}
 
@@ -115,9 +156,48 @@ def rgb(value):
     return ImageColor.getrgb(COLORS.get(value, value))[:3]
 
 
+def gradient(name, t):
+    """RGB at position t (0-1) along GRADIENTS[name]. 0 is the dark stop, 1 the bright one."""
+    stops = GRADIENTS[name]
+    if t <= stops[0][0]:
+        return stops[0][1]
+    if t >= stops[-1][0]:
+        return stops[-1][1]
+    for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+        if t <= p1:
+            k = (t - p0) / (p1 - p0)
+            return tuple(round(a + (b - a) * k) for a, b in zip(c0, c1))
+    return stops[-1][1]
+
+
+def map_gradient(c, name):
+    """The gradient color at c's brightness. Hue is replaced; dark stays dark and bright stays bright."""
+    r, g, b = c[:3]
+    return gradient(name, (0.299 * r + 0.587 * g + 0.114 * b) / 255)
+
+
+def grade_image(img, name):
+    """Recolor an image by brightness through a named gradient. Used for the photo under --gradient glyphs."""
+    lut = [map_gradient((i, i, i), name) for i in range(256)]
+    gray = img.convert("L")
+    return Image.merge("RGB", [gray.point([c[k] for c in lut]) for k in range(3)])
+
+
 def load(path):
     img = Image.open(io.BytesIO(sys.stdin.buffer.read()) if path == "-" else path)
     return ImageOps.exif_transpose(img)
+
+
+def _scatter(levels, width, steps):
+    """Shift each level by up to ±steps, from a hash of its cell. A smooth ramp then mixes the glyphs
+    on either side of a tone instead of painting one character across the whole row. Stable per cell."""
+    out = []
+    for i, level in enumerate(levels):
+        x, y = i % width, i // width
+        n = (x * 374761393 + y * 668265263) & 0xFFFFFFFF
+        n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
+        out.append(level + ((n & 65535) / 32767.5 - 1) * steps)
+    return out
 
 
 def dither_levels(levels, width, top):
@@ -231,7 +311,7 @@ def flatten(img, back):
 def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1.0,
             invert=False, dither=False, bg="black", mode="ramp", sharpen=False, autocontrast=True,
             words=WORDS, seed=0, accent=None, accent_level=0.5, palette=8, cut=None, over_photo=False, tone=False,
-            backdrop=0.0):
+            backdrop=0.0, gradient=None, mix=0):
     """Return rows of (char, (r, g, b)) cells. `aspect` is char width / char height.
 
     mode "shape" maps brightness like "ramp", then gives each cell with an edge the ASCII symbol whose
@@ -252,6 +332,10 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     as (char, ink, background) cells: glyphs alone cover little of a cell, so color fields (paintings) read dim.
     `dither` is True (Floyd-Steinberg) or "bayer" (ordered, anchored to the pixel grid, so it holds still in
     animation). Halfblock has no levels to dither: snap its colors with snap_grid(grid, "pico8", ordered=True).
+    `gradient` (a GRADIENTS name) replaces each color with that gradient at the pixel's brightness.
+    `mix` (ramp only) scatters each level by up to this many glyph steps, so a gradient is a texture of
+    nearby characters instead of stripes. mode "stipple" is fixed-size dots on a square grid; a cell is
+    on when its brightness beats the Bayer threshold there, so tone is density, not dot size.
     """
     ramp = CHARSETS.get("standard" if charset is None else charset, charset)
     if len(ramp) < 2:
@@ -283,14 +367,22 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
     small = img.resize((pw, ph), resample, reducing_gap=3.0)
     if mode == "halfblock":  # true colors, two pixels per cell
         px = (ImageOps.invert(small) if invert else small).load()
-        return [[(HALF, px[x, 2 * r], px[x, 2 * r + 1]) for x in range(width)] for r in range(rows)]
+
+        def col(p):
+            return map_gradient(p, gradient) if gradient else p
+        return [[(HALF, col(px[x, 2 * r]), col(px[x, 2 * r + 1])) for x in range(width)] for r in range(rows)]
     dark_bg = sum(back) < 384
     if mode == "words":
-        return _words(small, back, invert, words, seed, accent and rgb(accent), accent_level)
+        return _words(small, back, invert, words, seed, accent and rgb(accent), accent_level, gradient)
     if mode == "tiles":
-        return _tiles(small, width, rows, ramp if charset else None, back, dark_bg, palette, seed)
+        return _tiles(small, width, rows, ramp if charset else None, back, dark_bg, palette, seed, gradient)
     if mode in ("led", "dots"):
-        return _lamps(small, back, ramp if charset else ROUND, mode == "led", invert)
+        grid = _lamps(small, back, ramp if charset else ROUND, mode == "led", invert)
+        if gradient:
+            grid = [[(ch, map_gradient(c, gradient)) for ch, c in row] for row in grid]
+        return grid
+    if mode == "stipple":
+        return _stipple(small, back, invert, gradient)
 
     # Ink density per pixel: on a dark background bright pixels get dense glyphs.
     top = 1 if mode == "braille" else len(ramp) - 1
@@ -303,6 +395,8 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         levels = [min(top, int(v + bayer(i % pw, i // pw))) for i, v in enumerate(levels)]
     elif dither:
         dither_levels(levels, pw, top)
+    if mix and mode == "ramp":  # after dither: a smooth field becomes a mix of the glyphs around that tone
+        levels = _scatter(levels, pw, mix)
     # Braille color is the average of the cell's 8 pixels.
     raw = (small if sx == sy == 1 else small.resize((width, rows), Image.Resampling.BOX)).tobytes()
     if mode != "braille":
@@ -322,7 +416,13 @@ def convert(img, width=100, charset=None, aspect=0.5, contrast=1.0, brightness=1
         c = raw[i * 3:i * 3 + 3]
         if over_photo:
             k = PHOTO_INK if dark_bg else 1 / PHOTO_INK
-            cells.append((ch, tuple(min(255, round(v * k)) for v in c)))
+            boosted = tuple(min(255, round(v * k)) for v in c)
+            cells.append((ch, map_gradient(boosted, gradient) if gradient else boosted))
+            continue
+        if gradient:  # the stops carry the tone, so dark ink stays the dark stop instead of being brightened
+            ink = map_gradient(c, gradient)
+            bgc = tuple(round(b + (v - b) * backdrop) for b, v in zip(back, ink))
+            cells.append((ch, ink, bgc) if backdrop else (ch, ink))
             continue
         true = c  # backdrops and --colors use the pixel's true color
         if not tone:
@@ -354,7 +454,7 @@ def _word_rows(vocab, width, rows, seed):
     return out
 
 
-def _words(small, back, invert, words, seed, accent, accent_level):
+def _words(small, back, invert, words, seed, accent, accent_level, gradient=None):
     """Word poster cells: each word gets one ink from the mean color under all its cells."""
     vocab = words.replace(",", " ").upper().split()
     if not vocab:
@@ -376,8 +476,14 @@ def _words(small, back, invert, words, seed, accent, accent_level):
             if max(c) > 0:  # keep some of the photo's hue, at the same peak brightness
                 ink = [i + (v * max(ink) / max(c) - i) * TINT for i, v in zip(ink, c)]
             ink = tuple(min(255, round(v)) for v in ink)
+            if gradient:
+                ink = map_gradient(ink, gradient)
             box = accent and (max(c) - min(c)) / 255 >= accent_level
-            row[a:b] = [(ch, back, accent) if box else (ch, ink) for ch in text[a:b]]
+            if box and gradient:  # the box takes the gradient; the letters stay a color that reads on it
+                box_c = map_gradient(accent, gradient)
+                row[a:b] = [(ch, TILE_INK[_lum(box_c) < 140], box_c) for ch in text[a:b]]
+            else:
+                row[a:b] = [(ch, back, accent) if box else (ch, ink) for ch in text[a:b]]
         grid.append(row)
     return grid
 
@@ -386,7 +492,7 @@ def _lum(c):
     return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 
 
-def _tiles(small, width, rows, ramp, back, dark_bg, palette, seed):
+def _tiles(small, width, rows, ramp, back, dark_bg, palette, seed, gradient=None):
     """Each cell takes the most common of its 4x4 samples: the page, or a palette color. So edges stay crisp
     and blends between two colors never use up a palette slot."""
     page, sign = _lum(back), 1 if dark_bg else -1
@@ -417,9 +523,52 @@ def _tiles(small, width, rows, ramp, back, dark_bg, palette, seed):
                                         for y in range(r * 4, r * 4 + 4) for i in range(y * pw + x * 4, y * pw + x * 4 + 4))
             k = votes.most_common(1)[0][0]
             t = palette[k] if k >= 0 else None
+            if t and gradient:
+                t = map_gradient(t, gradient)
             row.append((ch, TILE_INK[_lum(t) < 140], t) if t else (ch, faint))
         grid.append(row)
     return grid
+
+
+def _stipple(small, back, invert, gradient=None):
+    """Fixed-size dots. Brightness picks how many cells are on (Bayer), not how big the dot is, so a globe
+    or a rocket stays a grid of equal dots. On a light page the dark pixels are the ink."""
+    px, grid, dark = small.load(), [], sum(back) < 384
+    for y in range(small.height):
+        row = []
+        for x in range(small.width):
+            c = px[x, y]
+            if invert:
+                h, l, s = colorsys.rgb_to_hls(*(v / 255 for v in c))
+                c = tuple(round(v * 255) for v in colorsys.hls_to_rgb(h, 1 - l, s))
+            amt = _lum(c) / 255 if dark else 1 - _lum(c) / 255
+            on = amt > bayer(x, y)
+            if gradient and on:
+                c = map_gradient(c, gradient)
+            row.append(("●" if on else " ", c))
+        grid.append(row)
+    return grid
+
+
+def _stipple_png(grid, bg, fg, cw, chh):
+    """One disc per lit cell, the same radius in every cell. Empty cells stay the page."""
+    back = (0, 0, 0) if bg == "none" else rgb(bg)
+    cols, rows = len(grid[0]), len(grid)
+    W, H = cols * cw, rows * chh
+    radius = STIPPLE_R * min(cw, chh)
+    cx, cy = (cw - 1) / 2, (chh - 1) / 2
+    dot = [min(255, max(0, round((radius + 0.6 - math.hypot(x - cx, y - cy)) * 255)))
+           for y in range(chh) for x in range(cw)]
+    on = Image.new("L", (cols, rows))
+    on.putdata([0 if ch == " " else 255 for row in grid for ch, _ in row])
+    coverage = ImageChops.multiply(_tile(dot, cw, chh, cols, rows), on.resize((W, H), Image.Resampling.NEAREST))
+    colors = Image.new("RGB", (cols, rows))
+    colors.putdata([fg or c for row in grid for _ch, c in row])
+    colors = colors.resize((W, H), Image.Resampling.NEAREST)
+    if bg == "none":
+        colors.putalpha(coverage)
+        return colors
+    return Image.composite(colors, Image.new("RGB", (W, H), back), coverage)
 
 
 def _ink(c, back):
@@ -547,20 +696,20 @@ def _lamp_png(grid, bg, fg, cw, chh, led):
 
 @functools.lru_cache(maxsize=8)
 def _glyph_vectors(aspect):
-    """(char, shape vector) for each SHAPE_CHARS glyph, drawn with the font to_png uses.
-    Tone is scaled so the densest glyph matches a white cell, as in the ramp."""
-    cw = 29  # glyph cell at 48px, big enough to measure
-    chh = max(1, round(cw / aspect))
-    f = font(48, SHAPE_CHARS)
-    vecs = {}
-    for ch in SHAPE_CHARS:
-        im = Image.new("L", (cw, chh))
-        ImageDraw.Draw(im).text((cw / 2, chh / 2), ch, font=f, fill=255, anchor="mm")
-        vecs[ch] = im.resize((SHAPE_X, SHAPE_Y), Image.Resampling.BOX).tobytes()
+    """(char, shape vector) for each stroke mask. Masks live in the sample grid, so `aspect` does not
+    change them (it stays so the call site is unchanged). Tone is the mask's coverage on the same 0-1
+    scale as the cell's mean brightness: a full mask matches a white cell."""
+    del aspect
     n = SHAPE_X * SHAPE_Y
-    densest = max(sum(v) for v in vecs.values())
     tone_w = (SHAPE_TONE * n) ** 0.5
-    return [(ch, _shape_vector([b / 255 for b in v], sum(v) / densest * tone_w)) for ch, v in vecs.items()]
+    out = []
+    for ch, group in SHAPE_MASKS.items():
+        for mask in group:
+            if len(mask) != n or set(mask) - set(".#"):
+                raise ValueError("shape mask for %r must be %d of . and #" % (ch, n))
+            v = [1.0 if bit == "#" else 0.0 for bit in mask]
+            out.append((ch, _shape_vector(v, mask.count("#") / n * tone_w)))
+    return out
 
 
 def _shape_vector(v, tone):
@@ -743,6 +892,8 @@ def to_png(grid, bg="black", fg=None, font_size=12, aspect=0.5, gap=0, glow=0, u
     gx, gy = gap if isinstance(gap, tuple) else (gap, gap)
     cw = max(1, round(font_size * CELL_W))
     chh = max(1, round(cw / aspect))  # cell shape matches the aspect used to sample the image
+    if mode == "stipple":
+        return _stipple_png(grid, bg, fg, cw, chh)
     if mode in ("led", "dots"):
         return _lamp_png(grid, bg, fg, cw, chh, mode == "led")
     dot = max(1, round(min(cw / 2, chh / 4)))  # braille dot size in px
@@ -829,6 +980,46 @@ def _unit(text):
     return v
 
 
+def stamp_title(img, title, place="bottom", fill=None):
+    """Draw a large headline on a rendered picture. `title` may contain newlines (or the two characters \\n).
+    The size shrinks until the longest line fits the width. Place is 'top' or 'bottom', flush left."""
+    lines = [ln for ln in title.replace("\\n", "\n").split("\n")]
+    lines = lines or [""]
+    margin = max(12, img.width // 24)
+    size = max(18, img.width // 10)
+    font = None
+    while size >= 14:
+        for name in ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "Arial Bold.ttf"):
+            try:
+                font = ImageFont.truetype(name, size)
+                break
+            except OSError:
+                continue
+        if font is None:
+            font = ImageFont.load_default(size)
+        if max(font.getlength(ln) for ln in lines) <= img.width - 2 * margin:
+            break
+        size -= 2
+        font = None
+    if font is None:
+        font = ImageFont.load_default(14)
+    if fill is None:
+        corner = img.getpixel((min(2, img.width - 1), min(2, img.height - 1)))
+        fill = (255, 255, 255) if sum(corner[:3]) < 384 else (16, 16, 16)
+    gap = max(2, size // 8)
+    heights = []
+    for ln in lines:
+        box = font.getbbox(ln)
+        heights.append(box[3] - box[1])
+    block = sum(heights) + gap * (len(lines) - 1)
+    y = margin if place == "top" else max(margin, img.height - margin - block)
+    draw = ImageDraw.Draw(img)
+    for ln, h in zip(lines, heights):
+        draw.text((margin, y), ln, font=font, fill=fill)
+        y += h + gap
+    return img
+
+
 def underlay(img, bg, strength):
     """The photo to draw behind the glyphs (the `under` of to_png and to_html): the original picture, untouched,
     only dimmed toward the page. `strength` (0-1) is how much of the photo shows; 1 is the photo as it is."""
@@ -849,6 +1040,9 @@ def add_poster_args(p):
     p.add_argument("--accent", help="words mode: box color for the most colorful words, e.g. #f28c28")
     p.add_argument("--accent-level", type=float, default=0.5, help="words mode: saturation 0-1 a word needs for a box")
     p.add_argument("--palette", type=int, default=8, help="tiles: number of tile colors, 1-256 (default 8)")
+    p.add_argument("--gradient", choices=GRADIENTS, help="recolor by brightness through a gradient: %s. "
+                   "Dark takes the first stop, bright the last. With --under, the photo is graded the same way"
+                   % ", ".join(GRADIENTS))
 
 
 def poster_defaults(a, image):
@@ -860,9 +1054,9 @@ def poster_defaults(a, image):
     tiles = a.mode == "tiles"
     if a.mode == "words":
         a.colors = None  # word ink carries the image
-    square = a.mode in ("tiles", "led", "dots")
+    square = a.mode in ("tiles", "led", "dots", "stipple")
     defaults = {"aspect": 1.0 if square and image else 0.5,
-                "font_size": {"tiles": 80, "led": 26, "dots": 20}.get(a.mode, 12),
+                "font_size": {"tiles": 80, "led": 26, "dots": 20, "stipple": 14}.get(a.mode, 12),
                 "bg": POSTER_BG if a.mode in ("words", "tiles") else
                 "#%02x%02x%02x" % min(RETRO[a.colors], key=_lum) if a.colors else "black"}
     if a.style:
@@ -901,7 +1095,14 @@ def main(argv=None):
     p.add_argument("--mode", choices=SUBPIXELS, default="ramp",
                    help="ramp (default): one glyph per pixel; shape: edges drawn with matching symbols; braille: 2x4 dots per char; "
                         "halfblock: 2 colors per char; words: a poster of words lit by the image; "
-                        "tiles: square color tiles with one glyph each; led: an LED board; dots: a halftone print")
+                        "tiles: square color tiles with one glyph each; led: an LED board; dots: a halftone print; "
+                        "stipple: fixed-size dots, tone is how many are on")
+    p.add_argument("--mix", nargs="?", const=1.5, type=float, default=0, metavar="STEPS",
+                   help="ramp: scatter each cell by up to this many glyph steps so a gradient mixes nearby "
+                        "characters instead of banding into stripes. --mix alone is 1.5; 0 is off")
+    p.add_argument("--title", help="PNG/HTML: large headline over the art. Use \\n for a line break")
+    p.add_argument("--title-place", choices=("top", "bottom"), default="bottom",
+                   help="where --title sits (default bottom)")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--gap", type=int, help="PNG/HTML: px of background around each background cell (tiles: default 1); "
                    "words mode: px between boxes in stacked rows (default font size / 8)")
@@ -922,26 +1123,38 @@ def main(argv=None):
     poster_defaults(a, ext not in ("", ".txt"))
     if a.width is None:
         a.width = 100
-    if a.font_size < 1 or not 0 <= a.glow <= 1 or not 0 <= (a.under or 0) <= 1:
-        p.error("need --font-size >= 1, --glow 0-1 and --under 0-1")
+    if a.font_size < 1 or not 0 <= a.glow <= 1 or not 0 <= (a.under or 0) <= 1 or (a.mix or 0) < 0:
+        p.error("need --font-size >= 1, --glow 0-1, --under 0-1 and --mix >= 0")
+    if a.title and ext not in (".png", ".jpg", ".jpeg", ".webp", ".html", ".htm"):
+        p.error("--title needs a .png, .jpg, .webp or .html output")
     try:
         img = load(a.image)
         grid = convert(img, a.width, a.charset, a.aspect, a.contrast, a.brightness,
                        a.invert, a.dither, "black" if a.bg == "none" else a.bg, a.mode, a.sharpen,
                        words=a.words, seed=a.seed, accent=a.accent, accent_level=a.accent_level,
                        palette=RETRO[a.colors] if a.colors else a.palette, over_photo=bool(a.under),
-                       tone=bool(a.colors), backdrop=a.backdrop)
+                       tone=bool(a.colors), backdrop=a.backdrop, gradient=a.gradient, mix=a.mix)
         fg = rgb(a.fg) if a.fg and a.mode != "words" else None  # word ink carries the image, one color would hide it
         if a.colors:
             grid, fg = snap_grid(grid, a.colors, a.dither == "bayer"), fg and snap(fg, a.colors)
-        under = underlay(img, "black" if a.bg == "none" else a.bg, a.under) if a.under else None
+        page = "black" if a.bg == "none" else a.bg
+        src = grade_image(flatten(img, rgb(page)), a.gradient) if a.gradient and a.under else img
+        under = underlay(src, page, a.under) if a.under else None
         if ext in (".png", ".jpg", ".jpeg", ".webp"):
             img = to_png(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow, under, a.mode, pure=bool(a.colors))
             img = post.apply(img, a.post, img.height // len(grid))
+            if a.title:
+                img = stamp_title(img, a.title, a.title_place)
             (img.convert("RGB") if ext in (".jpg", ".jpeg") else img).save(a.output)
         elif ext in (".html", ".htm"):
+            page = to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow, under)
+            if a.title:
+                block = "<div style='font:700 42px/1.05 DejaVu Sans,sans-serif;padding:24px 28px'>%s</div>" % (
+                    "<br>".join(html.escape(ln) for ln in a.title.replace("\\n", "\n").split("\n")))
+                page = page.replace("</body>", block + "</body>") if a.title_place == "bottom" else page.replace(
+                    "<pre ", block + "<pre ", 1)
             with open(a.output, "w", encoding="utf-8") as out:
-                out.write(to_html(grid, a.bg, fg, a.font_size, a.aspect, a.gap, a.glow, under))
+                out.write(page)
         else:
             text = to_ansi(grid, fg) if a.color else to_text(grid, a.mode == "tiles")
             if a.output:

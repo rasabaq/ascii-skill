@@ -38,7 +38,10 @@ Paths below are relative to this skill's folder.
 | `--dither` | Floyd-Steinberg dithering. Good for smooth gradients and short ramps such as `blocks` or `minimal`. Put it after the image path (`--dither photo.jpg` reads the path as a dither name). |
 | `--dither bayer` | Ordered dithering with a fixed 8x8 pattern: the classic retro crosshatch. The pattern stays put from frame to frame, so it is safe for animation. With `--colors` it also dithers the colors. |
 | `--colors pico8` | Snap every color to a retro palette: `c64`, `pico8`, `gameboy` (4 greens), `cga` (black, cyan, magenta, white), `zx` (ZX Spectrum), `mono` (black and white), and two gradient maps: `matrix` (greens) and `vaporwave` (purple to peach). See "Retro palettes". |
-| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). |
+| `--gradient flare` | Recolor by brightness through a named gradient. Dark pixels take the first stop, bright pixels the last. See "Gradients". |
+| `--mode ramp` | `ramp` (default): one glyph per pixel, picked by brightness. `shape`: like ramp, but edges are drawn with symbols of the same shape (`/ \ | _`), so outlines are sharp. `braille`: each char holds 2x4 dots, so 8 pixels per char and much finer lines. `halfblock`: each char is `▀` with two true colors (top and bottom pixel), the sharpest color photo for terminals, HTML and PNG. `words`: a word poster (see "Word poster"). `tiles`: a tile poster (see "Tile poster"). `led`: an LED board (see "LED board"). `dots`: a halftone print (see "Halftone dots"). `stipple`: fixed-size dots on a square grid; tone is how many are on (see "Stipple"). |
+| `--mix 1.5` | Ramp only. Scatter each cell by up to this many glyph steps, so a smooth gradient mixes nearby characters (`X`, `S`, `0`) instead of banding into stripes. `--mix` alone is 1.5. The scatter stays put from frame to frame. |
+| `--title "Hello"` | PNG, JPG, WebP and HTML: a large headline over the art. `\n` breaks the line. `--title-place top` puts it at the top (default bottom). |
 | `--backdrop 0.35` | Ramp, shape and braille: each cell gets a background of its own color at this strength (0-1), so color fields read. Best for paintings and color photos. |
 | `--sharpen` | Sharpens edges before shrinking. Helps faces and fine detail, most of all in `braille` mode. |
 | `--aspect 0.5` | Character width divided by height. Raise it if the art looks squashed. |
@@ -101,6 +104,19 @@ uv run scripts/ascii.py photo.jpg --mode dots -w 90 --bg white --fg black -o new
 - An image with a black background (a scene, a logo) on white paper: add `--invert`. It flips light and dark but keeps the colors, so an orange planet prints as dark orange.
 - Not the same as `-c dots`, which is a braille ramp.
 
+## Stipple
+
+`--mode stipple` draws one disc per cell, always the same size, on a square grid. A cell is on when its brightness beats the ordered-dither threshold at that spot, so a gray is a pepper of dots and a bright shape on black becomes a cloud of equal dots. Dot color comes from the image, or from `--fg`.
+
+```bash
+uv run scripts/ascii.py earth.jpg --mode stipple -w 140 --fg white -o globe.png
+uv run scripts/ascii.py rocket.jpg --mode stipple -w 90 -o rocket.png
+```
+
+- Defaults: square cells of about 8 px (`--font-size 14`) on black.
+- Unlike `--mode dots`, the dot does not grow. Tone is density.
+- Unlike `--mode led`, unlit cells are empty and there is no glow.
+
 ## Retro palettes
 
 `--colors NAME` makes the art look like an old computer or console. Every color is snapped to that machine's palette. Add `--dither bayer` for the classic crosshatch between palette colors.
@@ -117,6 +133,29 @@ uv run scripts/animate.py --scene planet --mode halfblock --colors pico8 --dithe
 - The page defaults to the palette's darkest color, such as the Game Boy's dark green. Set `--bg` to change it.
 - PNG, GIF and WebP output add no other colors: glyph edges are not smoothed, and `░▒▓` are drawn as dot patterns.
 - `--fg` is snapped to the palette too. Tiles take their tile colors from the palette. Words mode ignores `--colors`.
+
+## Gradients
+
+`--gradient NAME` recolors the art by brightness. A dark pixel takes the first stop, a bright pixel the last, and the hue of the photo is replaced. The glyph still comes from the ramp, so the picture's structure stays and only the glow changes. With `--under`, the photo behind the glyphs is graded the same way.
+
+| Name | From dark to bright |
+|---|---|
+| `matrix` | phosphor greens |
+| `amber` | dim amber to hot white |
+| `vapor` | purple, pink, peach (the vaporwave palette as a smooth map) |
+| `flare` | navy, blue, orange, white core. An orange-to-blue lens flare |
+| `sunset` | purple night, magenta, sunset orange, gold |
+| `neon` | teal, cyan, pink, white |
+| `horizon` | indigo, crimson, orange, pale sun |
+| `signal` | charcoal, teal, gray, orange. Poster mosaics |
+
+```bash
+uv run scripts/ascii.py photo.jpg -c "XS0#. " --gradient flare -w 140 -o flare.png
+uv run scripts/ascii.py photo.jpg --style characters --gradient sunset --under 0.85 -o glow.png
+uv run scripts/animate.py photo.jpg --style characters --gradient neon --effect shimmer -o glow.mp4
+```
+
+`-c "XS0#. "` is the dense monospaced overlay those glow pictures use: heavy glyphs on the bright core, faint dots as it falls off. `--fg` still replaces the gradient with one ink color.
 
 ## Photo styles
 
@@ -237,7 +276,7 @@ Preset: `--mode halfblock -w 120 --post crt -o tv.png`
 
 ## Animation
 
-`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--glow`, `--style`, `--under`, `--colors`, `--dither`, `--look`, `--backdrop`, and the word and tile poster options). Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
+`scripts/animate.py` makes ASCII animation. It takes the same look options as `ascii.py` (`-w`, `-c`, `--mode`, `--sharpen`, `--bg`, `--fg`, `--invert`, `--contrast`, `--brightness`, `--font-size`, `--aspect`, `--gap`, `--glow`, `--style`, `--under`, `--colors`, `--dither`, `--look`, `--backdrop`, `--gradient`, and the word and tile poster options), plus `--wind` for the dust effect. Video input and `.mp4` output need ffmpeg. GIF and WebP do not.
 
 ```bash
 uv run scripts/animate.py cat.gif                          # play in the terminal, Ctrl-C stops
@@ -284,8 +323,8 @@ uv run scripts/animate.py juggler.webm --start 17 --duration 4 --mode braille --
 - `scan`: a bright CRT line sweeps down and types each row in, with a short glow.
 - `glitch`: short bursts of torn rows, glyph swaps and red/cyan bands. Loops well.
 - `wave`: rows sway sideways on a sine wave that swells and calms. Loops well.
-- `shimmer`: the art holds still while its glyphs keep swapping for others of the same weight (`S` for `#`, `0` for `@`; in braille a dot moves), a few at a time, so it looks alive. Loops well. Best with `--under`.
-- `dust`: the art comes apart into wind-blown dust and grows back, over 4 seconds. The edge the wind blows toward (the left) crumbles first; its glyphs wear down to `* + : .` as they swirl away and fade, and a few grains are red. Loops well. Best on a subject with dark space beside it, so the dust has room to fly. To blow right instead, call `effects.frames(grid, "dust", wind="right")` from Python.
+- `shimmer`: the art holds still while its glyphs keep swapping for others of the same weight (`S` for `#`, `0` for `@`; in braille a dot moves; `◆` for `♦`, `●` for `◉`, `┃` for `║`), a few at a time, so it looks alive. Loops well. Best with `--under`. Works on the symbol photo styles too (`lines`, `diagonal`, `diamond`, `dot`, `cross`).
+- `dust`: the art comes apart into wind-blown dust and grows back, over 4 seconds. The edge the wind blows toward crumbles first (the left, or the right with `--wind right`); its glyphs wear down to `* + : .` as they swirl away and fade, and a few grains are red. Loops well. Best on a subject with dark space beside it, so the dust has room to fly.
 
 `dust` also works on a moving input (a GIF, a video or a `--scene`): the animation keeps playing while it crumbles, and the clip is whole runs of it, so it still loops. Every other effect needs a still image.
 
@@ -307,7 +346,7 @@ uv run scripts/animate.py photo.jpg --style diamond --effect decode -o out.mp4  
 uv run scripts/animate.py clip.mp4 --style lines -o out.mp4                          # a video as moving dashes
 ```
 
-- `shimmer` only swaps letters and braille dots. With `lines`, `diagonal`, `diamond`, `dot` and `cross` nothing moves, so use another effect there.
+- `shimmer` swaps letters, braille dots, and the symbol styles (`lines`, `diagonal`, `diamond`, `dot`, `cross`) for another glyph of the same weight.
 - The HTML player and the terminal cannot show the photo under the glyphs. There a style only sets the ramp and the cell shape. Use `.mp4`, `.gif` or `.webp` for the full look.
 
 ### Scenes

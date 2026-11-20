@@ -181,7 +181,11 @@ def _second(c, g):
     return c + g[2:]
 
 
-SIMILAR = ("@#%&$B8", "0SXZ96", "x+=*", "-:~;", ".,'`")  # glyphs of about the same weight
+# Glyphs of about the same weight. The letter groups come first, so a letter never matches a symbol group.
+# The symbol groups are the photo styles (lines, diagonal, diamond, dot, cross): each ramp step has only
+# one glyph, so without a twin of the same weight shimmer left those styles frozen.
+SIMILAR = ("@#%&$B8", "0SXZ96", "x+=*", "-:~;", ".,'`",
+           "┃║", "╏┇┋", "╹╻", "╲\\", "╱/", "′´", "◆♦", "◇◊", "●◉", "•∙", "·⋅", "✖✘", "✕×✗")
 
 
 def _twin(ch, rng):

@@ -67,6 +67,17 @@ assert 0.02 < sum(changed) / len(seq) / cells < 0.2, sum(changed) / len(seq) / c
 assert all(changed[len(seq) // 4: -len(seq) // 4])  # always something moving mid-loop
 weight = lambda ch: next(i for i, fam in enumerate(("@#%&$B8", "0SXZ96", "x+=*")) if ch in fam)
 assert all(weight(ch) == weight(a[0]) for f in seq for r, ar in zip(f, art) for (ch, _c), a in zip(r, ar) if ch != " ")
+# Symbol photo styles have one glyph per weight. Shimmer swaps in a twin, so the picture still reads.
+symbols = "┃╏╹╲/′◆◇●•·✖✕×"
+sym = [[(symbols[(x + y) % len(symbols)], (220, 180, 40)) for x in range(36)] for y in range(10)]
+seq = frames(sym, "shimmer", seed=2)
+fams = ("┃║", "╏┇┋", "╹╻", "╲\\", "╱/", "′´", "◆♦", "◇◊", "●◉", "•∙", "·⋅", "✖✘", "✕×✗")
+fam = lambda ch: next(s for s in fams if ch in s)
+changed = [sum(ch != a[0] for r, ar in zip(f, sym) for (ch, _c), a in zip(r, ar)) for f in seq]
+cells = sum(ch != " " for r in sym for ch, _c in r)
+assert 0.02 < sum(changed) / len(seq) / cells < 0.2, sum(changed) / len(seq) / cells
+assert all(changed[len(seq) // 4:-len(seq) // 4])
+assert all(fam(ch) == fam(a[0]) for f in seq for r, ar in zip(f, sym) for (ch, _c), a in zip(r, ar))
 print("ok shimmer")
 
 # Dust: starts on the art, eats the side the wind blows toward, and grains fly out past the art's edge.

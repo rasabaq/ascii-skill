@@ -25,8 +25,8 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageSequen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ascii import (CELL_W, CHARSETS, HALF, COLORS, MAX_SIDE, SUBPIXELS, UNSUPPORTED, _corner, add_poster_args, convert,  # noqa: E402
-                   POSTER_BG, RETRO, parse_look, poster_defaults, rgb, snap_grid, stretch_lut, to_ansi, to_png, underlay,
-                   value_hist)
+                   POSTER_BG, RETRO, grade_image, parse_look, poster_defaults, rgb, snap_grid, stretch_lut, to_ansi,
+                   to_png, underlay, value_hist)
 from ascii import snap as snap_color  # noqa: E402  (this file's own snap() rounds frame times)
 import effects  # noqa: E402
 import post  # noqa: E402
@@ -324,8 +324,9 @@ def to_mp4(images, durs, path, fps, crf=23):
         proc.stdin.close()
     except BrokenPipeError:
         pass
-    err = proc.communicate()[1].decode(errors="replace").strip()
-    if proc.returncode:
+    # communicate() flushes stdin again, and on Python 3.12 that raises once stdin is already closed.
+    err = proc.stderr.read().decode(errors="replace").strip()
+    if proc.wait():
         raise ValueError("ffmpeg: " + (err.splitlines() or ["failed"])[-1])
 
 
@@ -372,7 +373,7 @@ def main(argv=None):
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
-    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led or dots")
+    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led, dots or stipple")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image (dust also works on an animation or --scene): %s"
                    % ", ".join(effects.EFFECTS))
@@ -394,6 +395,8 @@ def main(argv=None):
                    "from the still background to count as subject (default 40)")
     p.add_argument("--steady", type=float, default=6, help="keep a pixel until it changes by more than this (0-255), "
                    "so video noise does not make still areas flicker (default 6; 0 = off; grainy film: 16)")
+    p.add_argument("--wind", choices=("left", "right"), default="left",
+                   help="dust: the edge the wind blows toward, which crumbles first (default left)")
     add_poster_args(p)
     p.add_argument("--post", type=post.parse, default=(), metavar="LIST",
                    help="GIF/WebP/MP4: post effects, comma separated: %s" % ", ".join(post.EFFECTS))
@@ -489,7 +492,7 @@ def main(argv=None):
             return convert(im, width, a.charset, a.aspect, a.contrast, a.brightness, a.invert, a.dither,
                            bg, mode=a.mode, sharpen=a.sharpen, autocontrast=False, palette=palette, seed=a.seed,
                            words=a.words, accent=a.accent, accent_level=a.accent_level, cut=cut,  # same seed: same layout
-                           over_photo=bool(a.under), tone=bool(a.colors), backdrop=a.backdrop)
+                           over_photo=bool(a.under), tone=bool(a.colors), backdrop=a.backdrop, gradient=a.gradient)
 
         pal = RETRO[a.colors] if a.colors else a.palette
         if a.mode == "tiles" and len(images) > 1:  # one palette from a stack of sample frames, so colors never flicker
@@ -506,10 +509,10 @@ def main(argv=None):
             if fg and a.mode not in ("led", "dots"):  # bake the ink in, so bright heads still show (led/dots: they do)
                 grids, fg = [[[(c[0], fg) + tuple(c[2:]) for c in row] for row in g] for g in grids], None
             if moving:  # the animation keeps playing under the dust, at its own frame times
-                grids = effects.frames(grids[0], a.effect, bg=back, seq=grids)
+                grids = effects.frames(grids[0], a.effect, bg=back, seq=grids, wind=a.wind)
                 durs = [durs[i % len(durs)] for i in range(len(grids))]
             else:
-                grids = effects.frames(grids[0], a.effect, bg=back)
+                grids = effects.frames(grids[0], a.effect, bg=back, wind=a.wind)
                 durs = [1000 / effects.FPS] * len(grids)
         if a.colors:  # after the effect, so its glows land on the palette too
             grids, fg = [snap_grid(g, a.colors, a.dither == "bayer") for g in grids], fg and snap_color(fg, a.colors)
@@ -522,8 +525,8 @@ def main(argv=None):
                 raise ValueError("too big (%d frames of %d columns); lower -w, --font-size or --max-frames"
                                  % (len(grids), len(grids[0][0])))
             unders = [None] * len(grids)
-            if a.under:  # the photo behind the glyphs
-                soft = [underlay(im, bg, a.under) for im in photos]
+            if a.under:  # the photo behind the glyphs; --gradient grades it the same way as the ink
+                soft = [underlay(grade_image(im, a.gradient) if a.gradient else im, bg, a.under) for im in photos]
                 unders = [soft[min(i, len(soft) - 1)] for i in range(len(grids))]  # an effect reuses its one still
             out = [post.apply(to_png(g, a.bg if ext == ".webp" else bg, fg, a.font_size, a.aspect, a.gap, a.glow, u,
                                      a.mode, pure=bool(a.colors)), a.post, max(1, round(cw / a.aspect)))
