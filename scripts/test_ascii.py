@@ -217,7 +217,7 @@ assert out.returncode == 0 and "█".encode() in out.stdout, out.stderr
 
 for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"], ["-c", ""],
              ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"], ["--backdrop", "1.5"],
-             ["--gradient", "nope"],
+             ["--gradient", "nope"], ["--mix", "-1"], ["--title", "Hi"],
              ["--under", "2", "-o", tmp + ".png"], ["--under", "0.5"]):  # --under is 0-1 and needs a picture
     try:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -308,4 +308,17 @@ assert g > r + 40 and g > b + 40, (r, g, b)
 main([tmp, "--gradient", "sunset", "-w", "10", "-o", tmp + ".grad.png"])
 warm = Image.open(tmp + ".grad.png").convert("RGB").getpixel((Image.open(tmp + ".grad.png").width - 3, 4))
 assert warm[0] > warm[2] + 40, warm
+# --mix turns one glyph into a scatter of its neighbours, and the scatter does not crawl between calls.
+flat = Image.new("L", (120, 60), 140)
+one = set(to_text(convert(flat, 24, charset="XS0#. ", autocontrast=False))) - {"\n"}
+many = set(to_text(convert(flat, 24, charset="XS0#. ", autocontrast=False, mix=1.5))) - {"\n"}
+assert len(one) <= 2 and len(many) >= 3 and many <= set("XS0#. "), (one, many)
+assert convert(flat, 24, charset="XS0#. ", autocontrast=False, mix=1.5) == \
+    convert(flat, 24, charset="XS0#. ", autocontrast=False, mix=1.5)
+# --title draws a headline on the picture.
+blank = tmp + ".blank.png"
+Image.new("RGB", (80, 40)).save(blank)
+main([blank, "--title", "Hello\\nthere", "-w", "20", "-o", blank + ".out.png"])
+titled = Image.open(blank + ".out.png").convert("L")
+assert titled.crop((0, int(titled.height * 0.62), titled.width, titled.height)).getextrema()[1] > 0
 print("ok")

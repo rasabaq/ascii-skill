@@ -2,7 +2,7 @@
 
 A free, open-source agent skill that turns images, GIFs and video into ASCII art and ASCII animation. Inspired by [ASCII Magic](https://www.ascii-magic.com/).
 
-- **Eight modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster), `tiles` (a square-tile poster), `led` (an LED board with glowing lamps) and `dots` (a halftone print). The last two still give round-glyph text
+- **Nine modes:** `ramp` (classic), `shape` (outlines drawn with `/ \ | _`), `braille` (8 dots per character), `halfblock` (two true colors per character), `words` (a typographic word poster), `tiles` (a square-tile poster), `led` (an LED board with glowing lamps), `dots` (a halftone print) and `stipple` (fixed-size dots, tone is density). `led`, `dots` and `stipple` still give round-glyph text
 - **Photo styles:** `--style characters`, `lines`, `diagonal`, `diamond`, `dot` or `cross` draws small glowing glyphs over the original photo, so the picture stays easy to see. `--mode halfblock --gap 1` makes a mosaic
 - **Moving ASCII:** GIF, WebP, APNG or any video in; GIF, WebP, MP4, an HTML player or terminal playback out. `--subject` keeps only what moves (still camera), and still areas do not flicker
 - **From a description:** `fetch.py "running horse"` finds a freely licensed clip on Wikimedia Commons and prints its attribution

@@ -373,7 +373,7 @@ def main(argv=None):
     p.add_argument("--start", type=float, default=0, help="start at this second")
     p.add_argument("--duration", type=float, help="stop after this many seconds")
     p.add_argument("--max-frames", type=int, default=300, help="frame cap (default 300)")
-    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led or dots")
+    p.add_argument("--mode", choices=SUBPIXELS, default="ramp", help="ramp (default), shape, braille, halfblock, words, tiles, led, dots or stipple")
     p.add_argument("--sharpen", action="store_true", help="unsharp mask before shrinking, for crisper edges")
     p.add_argument("--effect", choices=effects.EFFECTS, help="animate a still image (dust also works on an animation or --scene): %s"
                    % ", ".join(effects.EFFECTS))
