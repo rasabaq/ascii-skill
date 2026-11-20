@@ -7,11 +7,11 @@ A free, open-source agent skill that turns images, GIFs and video into ASCII art
 - **Moving ASCII:** GIF, WebP, APNG or any video in; GIF, WebP, MP4, an HTML player or terminal playback out. `--subject` keeps only what moves (still camera), and still areas do not flicker
 - **From a description:** `fetch.py "running horse"` finds a freely licensed clip on Wikimedia Commons and prints its attribution
 - **Scenes drawn in code:** `fire`, `donut`, `cube`, `waves`, `stars`, `walker`, `rain`, `bounce`, `text`, `flower`, `city`, `tree`, `planet`, `gears`, all looping
-- **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`, `shimmer` (with `--under` for the photo behind the glyphs), `dust`
+- **Effects for still images:** `matrix`, `decode`, `scan`, `glitch`, `wave`, `shimmer` (letters and the symbol styles; `--under` keeps the photo behind the glyphs), `dust` (`--wind left|right`)
 - **Post effects:** `--post crt,bloom,chroma,scan,vignette,grain` for PNG, GIF, WebP and MP4, steady from frame to frame
 - **Looks in one word:** `--look matrix|vaporwave|terminal|noir|vhs|c64|pico8|gameboy|scoreboard|newspaper`; your own flags still win
 - **Outputs:** plain text, truecolor terminal, HTML, PNG, JPG, WebP, GIF, MP4
-- **Styling:** 13 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), black, white or transparent background, glow, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
+- **Styling:** 13 character ramps or your own, photo colors or one ink color, retro palettes (C64, PICO-8, Game Boy, CGA, ZX Spectrum), brightness gradients (`--gradient flare|sunset|neon|horizon` and others), black, white or transparent background, glow, dithering (Floyd-Steinberg, or a Bayer pattern that holds still in animation), sharpening
 
 Python 3.9+ and Pillow. ffmpeg only for video.
 
@@ -32,6 +32,7 @@ uv run scripts/ascii.py cat.jpg                                  # text in the t
 uv run scripts/ascii.py cat.jpg --mode halfblock --color         # best color photo in a terminal
 uv run scripts/ascii.py cat.jpg --mode braille --dither -o x.png # fine dot drawing
 uv run scripts/ascii.py cat.jpg --style diamond -o x.png         # diamonds glowing over the photo
+uv run scripts/ascii.py cat.jpg -c "XS0#. " --gradient flare -o x.png
 uv run scripts/ascii.py cat.jpg --mode tiles -w 32 -o poster.png
 uv run scripts/ascii.py cat.jpg --mode words --accent "#f28c28" -o poster.png
 uv run scripts/ascii.py cat.jpg --mode dots --bg white -o print.png

@@ -128,6 +128,35 @@ r, g, b = styled.getpixel((5, 5))
 assert styled.size == (100, 80) and 170 <= r <= 190 and 98 <= g <= 118 and b <= 46, (styled.size, r, g, b)
 assert "◇" in open(os.path.join(tmp, "style.html"), encoding="utf-8").read()
 
+# --gradient recolors the frames; --wind is passed through to dust (default left).
+import effects  # noqa: E402
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--gradient", "matrix", "-w", "10", "-o", os.path.join(tmp, "grad.gif")])
+    main([still, "-w", "10", "-o", os.path.join(tmp, "plain.gif")])
+assert Image.open(os.path.join(tmp, "grad.gif")).convert("RGB").tobytes() != \
+    Image.open(os.path.join(tmp, "plain.gif")).convert("RGB").tobytes()
+caught = {}
+real_frames = effects.frames
+def spy(grid, effect, n=None, seed=0, **opts):
+    caught[effect] = opts.get("wind")
+    return real_frames(grid, effect, n=n, seed=seed, **opts)
+effects.frames = spy
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        main([still, "--effect", "dust", "--wind", "right", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+        assert caught["dust"] == "right"
+        main([still, "--effect", "dust", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+        assert caught["dust"] == "left"
+finally:
+    effects.frames = real_frames
+try:
+    with contextlib.redirect_stderr(io.StringIO()):
+        main([still, "--effect", "dust", "--wind", "up", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+except SystemExit as e:
+    assert e.code == 2
+else:
+    raise AssertionError("--wind up must fail")
+
 
 def player_durs(args):
     path = os.path.join(tmp, "durs.html")

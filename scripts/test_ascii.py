@@ -13,7 +13,8 @@ import tempfile
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ascii import CHARSETS, PHOTO_INK, STYLES, convert, main, to_ansi, to_html, to_png, to_text, underlay  # noqa: E402
+from ascii import (CHARSETS, GRADIENTS, PHOTO_INK, STYLES, convert, gradient, main, map_gradient,  # noqa: E402
+                    to_ansi, to_html, to_png, to_text, underlay)
 
 # Left half black, right half white.
 img = Image.new("RGB", (40, 20), "black")
@@ -79,6 +80,9 @@ assert "/" not in to_text(convert(x, width=20)), "ramp mode is unchanged"
 bar = Image.new("L", (240, 120))
 ImageDraw.Draw(bar).rectangle((0, 24, 239, 35), fill=255)
 assert set(to_text(convert(bar, width=8, mode="shape")).split("\n")[0]) <= set("-_"), "horizontal bar"
+vert = Image.new("L", (200, 300))
+ImageDraw.Draw(vert).line((100, 10, 100, 290), fill=255, width=10)
+assert to_text(convert(vert, width=16, mode="shape")).count("|") >= 8, "vertical bar"
 assert to_text(convert(x, width=20, mode="shape", bg="white", invert=True)) == art, "invert on white = dark bg"
 
 # Words mode: rows are whole vocabulary words (cut only at the edges), and one level per word.
@@ -213,6 +217,7 @@ assert out.returncode == 0 and "█".encode() in out.stdout, out.stderr
 
 for argv in (["-w", "0"], ["-w", "5000"], ["-o", "/no/such/dir/x.png"], ["-o", "x.xyz"], ["--font-size", "0"], ["-c", ""],
              ["--colors", "nope"], ["--dither", "ordered"], ["--look", "nope"], ["--backdrop", "1.5"],
+             ["--gradient", "nope"],
              ["--under", "2", "-o", tmp + ".png"], ["--under", "0.5"]):  # --under is 0-1 and needs a picture
     try:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -286,4 +291,21 @@ ImageDraw.Draw(pink).ellipse((8, 8, 32, 32), fill=(230, 90, 160))
 inks = [rgb for row in convert(pink, 20) for ch, rgb in row if ch.strip()]
 assert any(r > g + 60 for r, g, b in inks), "a pink subject stays pink: one contrast curve for R, G and B"
 assert all(abs(r - g) < 40 or r > g for r, g, b in inks), "the dark page's faint tint does not become bright green"
+
+# --gradient: brightness picks the stop. Glyphs stay; only the ink color changes. Stops rise in luminance.
+def lum(c):
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+for name, stops in GRADIENTS.items():
+    assert gradient(name, 0) == stops[0][1] and gradient(name, 1) == stops[-1][1]
+    assert all(lum(b) >= lum(a) - 1 for (_, a), (_, b) in zip(stops, stops[1:])), name
+assert map_gradient((0, 0, 0), "matrix") == gradient("matrix", 0)
+assert map_gradient((255, 255, 255), "flare") == gradient("flare", 1)
+plain = convert(img, width=10, autocontrast=False)
+graded = convert(img, width=10, autocontrast=False, gradient="matrix")
+assert [c[0] for c in plain[0]] == [c[0] for c in graded[0]]
+r, g, b = graded[0][-1][1]
+assert g > r + 40 and g > b + 40, (r, g, b)
+main([tmp, "--gradient", "sunset", "-w", "10", "-o", tmp + ".grad.png"])
+warm = Image.open(tmp + ".grad.png").convert("RGB").getpixel((Image.open(tmp + ".grad.png").width - 3, 4))
+assert warm[0] > warm[2] + 40, warm
 print("ok")
