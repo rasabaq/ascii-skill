@@ -1,0 +1,150 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Van Gogh in Glyphs</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  /* Layout: a dark gallery wall; three hung pieces side by side, each with its label card below. One column on a phone.
+     One look on purpose: a museum room at night, lit by the paintings' own chrome yellow. */
+  :root {
+    color-scheme: dark;
+    --wall: #0d0f16;         /* page: night-blue black */
+    --frame: #1b2030;        /* raised surfaces, rules */
+    --linen: #ece6d6;        /* main text */
+    --dusk: #9aa0b4;         /* secondary text */
+    --chrome: #f0c43a;       /* chrome yellow: the one accent */
+    --display: "Instrument Serif", "Times New Roman", serif;
+    --body: Inter, "Helvetica Neue", Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  body {
+    background: var(--wall);
+    color: var(--linen);
+    font: 400 15px/1.6 var(--body);
+    padding-block: 48px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+  header { max-width: 640px; display: flex; flex-direction: column; gap: 12px; }
+  h1 {
+    font: 400 clamp(2.4rem, 6vw, 3.6rem)/1.02 var(--display);
+    margin: 0; letter-spacing: -0.01em; text-wrap: balance;
+  }
+  h1 em { color: var(--chrome); }
+  header p { margin: 0; color: var(--dusk); }
+  header p strong { color: var(--linen); font-weight: 500; }
+
+  .room {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+    gap: 40px 32px;
+    align-items: start;
+  }
+  figure { margin: 0; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  video {
+    display: block; width: 100%; max-width: 100%;
+    background: var(--frame); border-radius: 3px;
+    box-shadow: 0 0 0 1px var(--frame), 0 18px 40px -20px #000;
+  }
+  video:focus-visible { outline: 2px solid var(--chrome); outline-offset: 3px; }
+  figcaption { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .tag { display: flex; align-items: baseline; gap: 12px; }
+  .letter {
+    font: 400 2.2rem/1 var(--display); color: var(--chrome);
+    min-width: 1.1em;
+  }
+  h2 { font: 400 1.6rem/1.15 var(--display); margin: 0; }
+  .work { color: var(--dusk); font-size: 0.8125rem; letter-spacing: 0.02em; }
+  .work i { font-family: var(--display); font-size: 1rem; color: var(--linen); letter-spacing: 0; }
+  figcaption p { margin: 0; color: var(--dusk); }
+  figcaption p strong { color: var(--linen); font-weight: 500; }
+  code {
+    font: 400 0.75rem/1.55 var(--mono);
+    display: block; color: var(--linen);
+    background: var(--frame); border-radius: 3px;
+    padding: 10px 12px; overflow-x: auto; white-space: pre;
+  }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 0.8125rem; }
+  dt { color: var(--dusk); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.6875rem; padding-top: 2px; }
+  .kept { margin-left: auto; font: 500 0.6875rem/1 var(--body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--wall); background: var(--chrome); padding: 5px 8px; border-radius: 2px; align-self: center; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  footer { border-top: 1px solid var(--frame); padding-top: 20px; color: var(--dusk); font-size: 0.8125rem; max-width: 820px; }
+  footer p { margin: 0 0 6px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Van Gogh in <em>glyphs</em></h1>
+    <p><strong>Four Van Gogh works, four effects from the ascii-art skill.</strong>
+       In each film a white line sweeps across: left of it is the painting, right of it is the same painting after the skill has drawn it. It starts on the whole painting, slides until the whole effect shows, and comes back.</p>
+  </header>
+
+  <main class="room">
+    <figure>
+      <video src="self-portrait-stipple-dust.mp4" poster="self-portrait-stipple-dust.jpg" autoplay muted loop playsinline controls
+             aria-label="Self-Portrait. A white line sweeps across the painting; behind it, the face is drawn as colored dots on black that blow away to the right as dust and then grow back."></video>
+      <figcaption>
+        <div class="tag"><span class="letter">1</span><h2>Dots that blow away as dust</h2></div>
+        <div class="work"><i>Self-Portrait</i> · 1887</div>
+        <p>The portrait becomes <strong>same-size dots on black</strong>, close to how he painted it in dabs. Then the wind takes it apart from the right edge and it grows back.</p>
+        <code>animate.py portrait.jpg --mode stipple -w 110 \
+  --effect dust --wind right -o self-portrait-stipple-dust.mp4</code>
+        <dl><dt>Loop</dt><dd>4 s effect, 12 s sweep</dd><dt>Best for</dt><dd>A face or one subject</dd></dl>
+      </figcaption>
+    </figure>
+
+    <figure>
+      <video src="almond-blossom-diamond-shimmer.mp4" poster="almond-blossom-diamond-shimmer.jpg" autoplay muted loop playsinline controls
+             aria-label="Almond Blossom. A white line sweeps across the painting; behind it, small diamonds glow on the white blossoms and twinkle as they swap between filled and hollow."></video>
+      <figcaption>
+        <div class="tag"><span class="letter">2</span><h2>Blossoms that twinkle as diamonds</h2></div>
+        <div class="work"><i>Almond Blossom</i> · 1890</div>
+        <p>Each blossom gets <strong>small glowing diamonds</strong>: filled on the brightest petals, hollow on the paler ones. They keep swapping a few at a time, so the branch seems to catch the light. The painting stays sharp underneath.</p>
+        <code>animate.py almond.jpg --style diamond \
+  --effect shimmer -o almond-blossom-diamond-shimmer.mp4</code>
+        <dl><dt>Loop</dt><dd>3 s effect, 12 s sweep</dd><dt>Best for</dt><dd>Bright spots on a calm ground</dd></dl>
+      </figcaption>
+    </figure>
+
+  
+      <figure>
+      <video src="irises-characters-shimmer.mp4" poster="irises-characters-shimmer.jpg" autoplay muted loop playsinline controls
+             aria-label="Irises. A white line sweeps across the painting; behind it, small letters and signs glow on the bright leaves and keep swapping for others of the same weight."></video>
+      <figcaption>
+        <div class="tag"><span class="letter">3</span><h2>Letters that flicker in the leaves</h2></div>
+        <div class="work"><i>Irises</i> · 1889</div>
+        <p>The classic ASCII look: <strong>letters and signs like S, X, 8 and #</strong> glow on the bright leaves, each in the color under it. They keep swapping for others of the same weight. The painting stays sharp underneath.</p>
+        <code>animate.py irises.jpg --style characters -w 90 \
+  --font-size 18 --effect shimmer -o irises-characters-shimmer.mp4</code>
+        <dl><dt>Loop</dt><dd>3 s effect, 12 s sweep</dd><dt>Best for</dt><dd>Paintings with bright areas</dd></dl>
+      </figcaption>
+    </figure>
+
+    <figure>
+      <video src="straw-hat-braille-shimmer.mp4" poster="straw-hat-braille-shimmer.jpg" autoplay muted loop playsinline controls
+             aria-label="Self-Portrait with Straw Hat. A white line sweeps across the painting; behind it, the whole portrait is redrawn in fine colored braille dots on black, with a few dots moving at a time."></video>
+      <figcaption>
+        <div class="tag"><span class="letter">4</span><h2>A portrait in fine braille dots</h2></div>
+        <div class="work"><i>Self-Portrait with Straw Hat</i> · 1887</div>
+        <p>The whole painting is redrawn as <strong>braille characters, 8 dots each</strong>, in the painting's own colors on black. That gives the finest detail of any mode. A few dots move at a time, so it breathes without changing.</p>
+        <code>animate.py strawhat.jpg --mode braille -w 110 \
+  --effect shimmer -o straw-hat-braille-shimmer.mp4</code>
+        <dl><dt>Loop</dt><dd>3 s effect, 12 s sweep</dd><dt>Best for</dt><dd>Faces, fine detail</dd></dl>
+      </figcaption>
+    </figure>
+  </main>
+
+  <footer>
+    <p>Any effect works on any painting, so you can mix them: for example, the dust effect on <i>Almond Blossom</i>.</p>
+    <p>Paintings: Vincent van Gogh, public domain. Images from Wikimedia Commons (Google Art Project). Cropped to fit and half redrawn by the ascii-art skill.</p>
+  </footer>
+</div>
+
+<script>
+  // Readers who ask for less motion get the still posters and press play themselves.
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.querySelectorAll("video").forEach(function (v) { v.removeAttribute("autoplay"); v.pause(); });
+  }
+</script>

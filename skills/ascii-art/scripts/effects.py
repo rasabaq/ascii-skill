@@ -1,0 +1,210 @@
+"""Animated ASCII effects: turn one grid into a list of grids that starts and ends on the art.
+
+    from effects import frames, EFFECTS, FPS
+    seq = frames(grid, "dust", seed=1)   # list of grids, seq[-1] == grid
+
+A grid is rows of (char, (r, g, b)) cells, as made by ascii.convert(). Every frame has the
+same size, and the first and last frames are the art itself, so every effect loops.
+Writers (GIF, MP4, terminal) live in animate.py. Pass colors baked into the grid: a single
+`fg` ink at render time would hide an effect's own colors (red grains, tints).
+"""
+import math
+import random
+
+FPS = 25  # all default frame counts are timed for this rate
+GLYPHS = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ$#%&*+=<>?/\\|!:;~^"
+BLACK = (0, 0, 0)
+
+
+def mix(c, t, k):
+    """Blend color c toward t by k (0 = c, 1 = t)."""
+    return (round(c[0] + (t[0] - c[0]) * k), round(c[1] + (t[1] - c[1]) * k), round(c[2] + (t[2] - c[2]) * k))
+
+
+def _dark(bg):
+    return sum(bg) < 384  # same split as ascii.convert()
+
+
+def _lit(c, bg=BLACK):  # cells close to the page get gray ink, so rain over them shows
+    if _dark(bg):
+        return c if max(c) > 60 else (150, 150, 150)
+    return c if min(c) < 195 else (105, 105, 105)
+
+
+def glitch(grid, n=50, rng=None, **_):
+    """The art with short bursts of row shifts, glyph swaps and color splits. Starts and ends clean: loops."""
+    rows, cols = len(grid), len(grid[0])
+    hot = set()
+    f = rng.randint(3, 8)
+    while f < n - 4:  # bursts of 2-4 frames, quiet gaps between, last frames clean
+        hot.update(range(f, min(n - 4, f + rng.randint(2, 4))))
+        f += rng.randint(8, 16)
+    out = []
+    for f in range(n):
+        frame = [list(row) for row in grid]
+        if f in hot:
+            power = rng.uniform(0.5, 1.0)
+            reach = max(1, int(cols * 0.15 * power))
+            for _ in range(rng.randint(2, 4)):  # bands slide sideways, tinted red or cyan, with torn glyphs
+                y0, dx = rng.randrange(rows), rng.choice((-1, 1)) * rng.randint(1, reach)
+                tint = rng.choice(((255, 40, 70), (40, 230, 255), None))
+                for y in range(y0, min(rows, y0 + rng.randint(1, max(2, rows // 6)))):
+                    line = []
+                    for x in range(cols):
+                        ch, c = grid[y][(x - dx) % cols]
+                        if rng.random() < 0.12 * power:
+                            ch, c = rng.choice(GLYPHS + "▓▒░"), _lit(c)
+                        line.append((ch, mix(c, tint, 0.55) if tint and ch != " " else c))
+                    frame[y] = line
+        out.append(frame)
+    out[-1] = [list(row) for row in grid]
+    return out
+
+
+def _second(c, g):
+    """Effect cell `c` (char, color) at the place of art cell `g`, with g's second color when g has one."""
+    if len(g) < 3 or c[0] == " ":
+        return c
+    if c[0] == g[0] and c[1] != g[1]:  # same glyph, recolored (a glow): shift the second color the same way
+        return c + (tuple(min(255, max(0, b + n - o)) for b, n, o in zip(g[2], c[1], g[1])),) + g[3:]
+    return c + g[2:]
+
+
+# Glyphs of about the same weight. The letter groups come first, so a letter never matches a symbol group.
+# The symbol groups are the photo styles (lines, diagonal, diamond, cross): each ramp step has only
+# one glyph, so without a twin of the same weight shimmer left those styles frozen.
+SIMILAR = ("@#%&$B8", "0SXZ96", "x+=*", "-:~;", ".,'`",
+           "┃║", "╏┇┋", "╹╻", "╲\\", "╱/", "′´", "◆♦", "◇◊", "●◉", "•∙", "·⋅", "✖✘", "✕×✗")
+
+
+def _twin(ch, rng):
+    """Another glyph of about the same weight: a letter or number from ch's family, or a braille cell
+    with one dot moved. Anything else (blocks, words) stays as it is."""
+    for fam in SIMILAR:
+        if ch in fam:
+            return rng.choice(fam.replace(ch, ""))
+    if "\u2801" <= ch <= "\u28ff":
+        dots = [b for b in range(8) if ord(ch) >> b & 1]
+        free = [b for b in range(8) if not ord(ch) >> b & 1]
+        if dots and free:
+            return chr(ord(ch) ^ (1 << rng.choice(dots)) ^ (1 << rng.choice(free)))
+    return ch
+
+
+def shimmer(grid, n=75, rng=None, rate=0.02, **_):
+    """The art holds still while its glyphs keep swapping for others of the same weight (S for #,
+    0 for @), a few at a time, so it looks alive. Pairs with animate.py --style, which keeps the photo
+    under them. `rate` is swaps per cell per frame. Starts and ends clean: loops."""
+    out = [[list(row) for row in grid] for _ in range(n)]
+    for y, row in enumerate(grid):
+        for x, (ch, c) in enumerate(row):
+            if ch == " ":
+                continue
+            t = rng.expovariate(rate)
+            while True:
+                dur = rng.randint(2, 6)  # frames the other glyph stays
+                if t + dur >= n - 1:  # nothing still swapped on the last frame
+                    break
+                g = _twin(ch, rng)
+                for f in range(int(t), int(t) + dur):
+                    out[f][y][x] = (g, c)
+                t += dur + rng.expovariate(rate)
+    return out
+
+
+def dust(grid, n=100, rng=None, bg=BLACK, wind="left", reach=0.45, red=0.035, seq=None, **_):
+    """The art comes apart into wind-blown dust and grows back. Cells near the edge the wind blows
+    toward go first and come back last; each leaves as a grain that rides a swirling wind and fades.
+    `reach` is how far into the art it eats (share of the width); about `red` of the grains are
+    crimson. Starts and ends clean: loops. `seq` is a moving picture (a list of grids the size of
+    `grid`) that keeps playing under the dust; `n` then rounds to whole runs of it, so both loop."""
+    rows, cols = len(grid), len(grid[0])
+    if seq:
+        n = len(seq) * max(1, round(n / len(seq)))
+    base = (lambda f: seq[f % len(seq)]) if seq else (lambda f: grid)
+    sx = -1 if wind == "left" else 1
+    a, b, c3 = (rng.uniform(0, 2 * math.pi) for _ in range(3))
+
+    def flow(x, y):
+        # Steady wind plus the curl of psi = sin(v+a) + 0.6 sin(1.7v-u+b) + 0.8 sin(1.3u+c): eddies
+        # that swirl without clumping. Cells are about twice as tall as wide, so rows move half as far.
+        u, v = 6 * x / max(8, cols), 6 * y / max(8, rows)
+        dv = math.cos(v + a) + 1.02 * math.cos(1.7 * v - u + b)
+        du = -0.6 * math.cos(1.7 * v - u + b) + 1.04 * math.cos(1.3 * u + c3)
+        return sx + 0.55 * dv, 0.5 * (-0.3 - 0.6 * du)
+
+    span = max(1.0, cols * reach)
+    grains = []  # (x, y, t0, t1, life, path, ch, color)
+    for y, row in enumerate(grid):
+        filled = [x for x, (ch, _c) in enumerate(row) if ch != " "]
+        if not filled:
+            continue
+        edge = filled[0] if sx < 0 else filled[-1]
+        for x in filled:
+            s = abs(x - edge) / span + rng.uniform(0, 0.15)  # 0 at the edge, 1 at full reach
+            if s >= 1 or rng.random() > (1 - s) ** 1.2:
+                continue
+            # The edge tends to go first. Each cell is gone for a while, so the art keeps shedding and
+            # re-forming through the loop, and all is back and still by the last frames.
+            t0 = 2 + (0.7 * s + 0.3 * rng.random()) * 0.55 * n
+            t1 = min(n - 3, t0 + rng.uniform(0.15, 0.3) * n)
+            life = max(1.0, min(rng.uniform(0.22, 0.38) * n, n - 2 - t0))
+            step = rng.uniform(0.15, 0.4) * cols / life
+            path, px, py = [], float(x), float(y)
+            for _ in range(int(life) + 1):  # the field is static, so each path is worked out once
+                path.append((round(px), round(py)))
+                vx, vy = flow(px, py)
+                px, py = px + vx * step, py + vy * step
+            ch, c = base(int(t0))[y][x][:2]  # what the cell shows as it lifts off
+            if ch == " ":
+                ch, c = row[x]
+            grains.append((x, y, t0, t1, life, path, ch, (220, 20, 60) if rng.random() < red else c))
+    out = []
+    for f in range(n):
+        now = base(f)
+        frame = [list(row) for row in now]
+        fade = {}  # cell -> how faded the grain drawn there is; the freshest wins
+        for x, y, t0, t1, life, path, ch, c in grains:
+            if t0 <= f < t1:  # the cell is gone; its last 3 frames grow back as small marks
+                k = (f - t1 + 3) / 3
+                frame[y][x] = (" ", now[y][x][1]) if k < 0 else (".+"[int(k * 2)], mix(now[y][x][1], bg, 0.5))
+            u = (f - t0) / life
+            if not 0 <= u < 1:
+                continue
+            gx, gy = path[int(life * u ** 1.15)]  # eased: grains lift off slowly, then the wind takes them
+            if 0 <= gx < cols and 0 <= gy < rows and u < fade.get((gx, gy), 2):
+                fade[gx, gy] = u
+                g = ch if u < 0.12 else "*+:.."[min(4, int((u - 0.12) / 0.88 * 5))]
+                frame[gy][gx] = (g, mix(c, bg, 1 - (1 - u) ** 0.9))
+        out.append(frame)
+    return out
+
+
+EFFECTS = {"glitch": glitch, "shimmer": shimmer, "dust": dust}
+
+
+def frames(grid, effect, n=None, seed=0, **opts):
+    """Return a list of grids for `effect`. The last one equals `grid` (or, with a moving `seq`, its
+    matching frame). Same seed, same frames. `n` is the frame count (default per effect, timed for FPS);
+    extra opts go to the effect."""
+    if effect not in EFFECTS:
+        raise ValueError("unknown effect %r: use %s" % (effect, ", ".join(EFFECTS)))
+    if not grid or not grid[0]:
+        raise ValueError("grid is empty")
+    if n is not None and n < 1:
+        raise ValueError("n must be at least 1")
+    kw = dict(opts, rng=random.Random(seed))
+    if n is not None:
+        kw["n"] = n
+    # Effects work on (char, color) cells. Two-color cells (mosaic, tiles) get their second color back:
+    # a moved original cell (same object) brings its own, any other glyph takes the one of its place (see _second),
+    # and a blank the effect made (art not shown yet) stays blank.
+    flat = [[cell[:2] for cell in row] for row in grid]
+    orig = {id(f): g for frow, grow in zip(flat, grid) for f, g in zip(frow, grow) if len(g) > 2}
+    out = EFFECTS[effect](flat, **kw)
+    if orig:
+        out = [[[orig.get(id(c)) or (_second(c, grid[y][x]) if len(c) == 2 else c) for x, c in enumerate(row)]
+                for y, row in enumerate(fr)] for fr in out]
+    last = opts.get("seq") or [grid]
+    out[-1] = [list(row) for row in last[(len(out) - 1) % len(last)]]  # settle exactly on the art, even for tiny n
+    return out

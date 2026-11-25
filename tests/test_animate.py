@@ -1,0 +1,240 @@
+# /// script
+# dependencies = ["pillow>=10.1"]
+# ///
+"""Run: uv run tests/test_animate.py"""
+import contextlib
+import io
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from argparse import Namespace
+
+from PIL import Image, ImageDraw, ImageSequence
+
+SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "ascii-art", "scripts")
+sys.path.insert(0, SCRIPTS)
+from animate import (MARK2, background, html_frame, main, shared_lut, snap, steady, subject_masks,  # noqa: E402
+                     timeline, to_html_player, to_mp4, video_frames)
+from ascii import convert  # noqa: E402
+
+# A 3-frame GIF: a white box moving over a dim gradient, with uneven delays.
+frames = []
+for k in range(3):
+    im = Image.linear_gradient("L").rotate(90).resize((80, 40)).point(lambda v: v // 2).convert("RGB")
+    ImageDraw.Draw(im).rectangle((10 + 20 * k, 10, 25 + 20 * k, 25), fill="white")
+    frames.append(im)
+tmp = tempfile.mkdtemp()
+src = os.path.join(tmp, "in.gif")
+frames[0].save(src, save_all=True, append_images=frames[1:], duration=[100, 200, 300], loop=0)
+
+main([src, "-o", os.path.join(tmp, "out.gif"), "-w", "20"])
+out = Image.open(os.path.join(tmp, "out.gif"))
+assert [f.info["duration"] for f in ImageSequence.Iterator(out)] == [100, 200, 300]
+assert out.info["loop"] == 0, "loops forever"
+
+
+
+def shown_frames(page):
+    """The player's data, as the text of each frame it shows, and the frame times."""
+    L, F, I, D = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", page).group(1))
+    return ["\n".join(L[n] for n in F[i]) for i in I], D
+
+
+main([src, "-o", os.path.join(tmp, "out.html"), "-w", "20"])
+page = open(os.path.join(tmp, "out.html"), encoding="utf-8").read()
+shown, D = shown_frames(page)
+assert len(shown) == 3 and D == [100, 200, 300], D
+
+# Embeddable: the art fills its container, nothing is fixed to the page, reduced motion shows a still,
+# and every rule is scoped to the player's own block.
+assert "100cqw" in page and "position:fixed" not in page and "prefers-reduced-motion" in page
+uid = re.search(r'<div id="(ascii-[0-9a-f]{8})">', page).group(1)
+css = re.search(r"<div id[^>]*><style>(.*?)</style>", page, re.S).group(1)
+assert all(rule.strip().startswith("#" + uid) for rule in re.split(r"}", css) if rule.strip()), css
+# A frame that moves in a few rows stores the other rows once.
+rows = [[(c, (200, 200, 200)) for c in "ab"]] * 30
+moved = [rows[:5] + [[("x", (0, 0, 0))] * 2] + rows[6:], rows]
+big = to_html_player(moved, [100, 100], "black", None, 12, 0.5)
+L = json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", big).group(1))[0]
+assert len(L) == 2, L
+assert shown_frames(big)[0] == [html_frame(g, None) for g in moved]
+
+# --fps resamples, --start/--duration cut, the cap truncates.
+ten = [(None, 100)] * 10
+assert len(timeline(ten, 0, 0, 20, 300)[0]) == 20
+assert len(timeline(ten, 200, 300, None, 300)[0]) == 3
+assert timeline(ten, 0, 0, None, 4) == ([[None, 100]] * 4, True)
+# 60 fps in GIF: no frame under 20 ms and the total length is kept.
+keep, durs = snap(list(range(60)), [1000 / 60] * 60, 10, 2)
+assert min(durs) >= 20 and sum(durs) == 1000, durs
+
+# One shared tonal range: a blinking bright box must not change the dim background.
+blink = [frames[0], frames[0].copy()]
+ImageDraw.Draw(blink[0]).rectangle((0, 0, 79, 39), fill=(60, 60, 60))
+ImageDraw.Draw(blink[0]).rectangle((0, 0, 10, 10), fill="white")
+blink[1].paste((60, 60, 60), (0, 0, 80, 40))
+sky = Image.new("RGB", (40, 40), (20, 20, 30))
+sky.paste((200, 200, 200), (0, 20, 40, 40))
+r, g, b = sky.point(shared_lut([sky])).getpixel((0, 39))
+assert r == g == b, "the shared stretch keeps hues: gray stays gray"
+lut = shared_lut(blink)
+rows = [convert(b.point(lut), 20, autocontrast=False)[3] for b in blink]
+assert rows[0][-5:] == rows[1][-5:], "background stays the same"
+
+# Mosaic rows keep their colored spaces, and the player's JS has no raw newline inside a regex.
+hb = [[("▀", (255, 0, 0), (0, 0, 255))] * 3, [("▀", (0, 255, 0), (0, 0, 0))] * 3]
+assert html_frame(hb, None).split("\n")[0] == MARK2 + "ff00000000ff   "
+page = to_html_player([hb], [100], "black", None, 12, 0.5)
+assert re.search(r"replace\(/\\n/g", page) and not re.search(r"replace\(/\n", page)
+
+# Tiles: square tiles in GIF and HTML, and each cell keeps its random glyph from frame to frame.
+main([src, "--mode", "tiles", "-w", "8", "-o", os.path.join(tmp, "tiles.gif")])
+assert Image.open(os.path.join(tmp, "tiles.gif")).size == (8 * 48, 4 * 48)
+main([src, "--mode", "tiles", "-w", "8", "-o", os.path.join(tmp, "tiles.html")])
+g1, g2 = (convert(f, 8, mode="tiles") for f in frames[:2])
+assert g1 != g2 and [c[0] for r in g1 for c in r] == [c[0] for r in g2 for c in r], "tile glyphs do not flicker"
+
+# A still image plus --effect makes a loop that ends on the art.
+still = os.path.join(tmp, "still.png")
+Image.new("RGB", (40, 30), (200, 120, 40)).save(still)
+main([still, "--effect", "glitch", "--mode", "mosaic", "-w", "10", "-o", os.path.join(tmp, "fx.gif")])
+fx = Image.open(os.path.join(tmp, "fx.gif"))
+assert fx.n_frames > 10 and fx.info.get("loop") == 0
+
+# --style works as in ascii.py: here square 10 px cells over the photo at 0.9. The HTML player has no photo.
+under = os.path.join(tmp, "under.webp")
+with contextlib.redirect_stdout(io.StringIO()):
+    main([still, "--style", "diamond", "-c", "  ", "-w", "10", "-o", under])
+    main([still, "--style", "diamond", "-w", "10", "-o", os.path.join(tmp, "style.html")])
+styled = Image.open(under).convert("RGB")
+r, g, b = styled.getpixel((5, 5))
+assert styled.size == (100, 80) and 170 <= r <= 190 and 98 <= g <= 118 and b <= 46, (styled.size, r, g, b)
+assert "◇" in open(os.path.join(tmp, "style.html"), encoding="utf-8").read()
+
+# --wind is passed through to dust (default left).
+import effects  # noqa: E402
+caught = {}
+real_frames = effects.frames
+def spy(grid, effect, n=None, seed=0, **opts):
+    caught[effect] = opts.get("wind")
+    return real_frames(grid, effect, n=n, seed=seed, **opts)
+effects.frames = spy
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        main([still, "--effect", "dust", "--wind", "right", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+        assert caught["dust"] == "right"
+        main([still, "--effect", "dust", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+        assert caught["dust"] == "left"
+finally:
+    effects.frames = real_frames
+try:
+    with contextlib.redirect_stderr(io.StringIO()):
+        main([still, "--effect", "dust", "--wind", "up", "-w", "8", "-o", os.path.join(tmp, "wind.gif")])
+except SystemExit as e:
+    assert e.code == 2
+else:
+    raise AssertionError("--wind up must fail")
+
+
+def player_durs(args):
+    path = os.path.join(tmp, "durs.html")
+    with contextlib.redirect_stdout(io.StringIO()) as said:
+        main(args + ["-o", path])
+    assert said.getvalue().startswith("wrote %s (" % path), said.getvalue()  # says where the file went
+    return json.loads(re.search(r"const \[L, F, I, D\] = (.*), box =", open(path, encoding="utf-8").read()).group(1))[3]
+
+
+# --hold: every effect loops with no pause by default; --hold keeps the last frame on screen.
+assert set(player_durs([still, "--effect", "glitch", "-w", "10"])) == {40}
+assert player_durs([still, "--effect", "glitch", "-w", "10", "--hold", "1.5"])[-1] == 1540
+assert player_durs([src, "-w", "10", "--hold", "2"]) == [100, 200, 2300]
+
+
+def player_rows(args, path):
+    """Run main to an HTML player; return each shown frame as text rows without color marks."""
+    main(args + ["-o", path])
+    return [re.sub("\ue000...", "", f).split("\n") for f in shown_frames(open(path, encoding="utf-8").read())[0]]
+
+
+# Noisy still camera: grey wall with grain, and a white square that moves 6 px per frame.
+rng = random.Random(1)
+clip = []
+for k in range(12):
+    im = Image.new("L", (80, 40))
+    im.putdata([100 + rng.randint(-4, 4) for _ in range(80 * 40)])
+    im = im.convert("RGB")
+    ImageDraw.Draw(im).rectangle((4 + 6 * k, 12, 15 + 6 * k, 27), fill="white")
+    clip.append(im)
+held = steady(clip, 6)
+wall = (0, 33, 79, 39)  # never touched by the square
+assert all(h.crop(wall).tobytes() == held[0].crop(wall).tobytes() for h in held), "grain no longer flickers"
+assert all(h.getpixel((9 + 6 * k, 20)) == (255, 255, 255) for k, h in enumerate(held)), "the square is followed"
+assert held[5].getpixel((9, 20))[0] < 110, "and leaves no trail"
+blue = steady([Image.new("RGB", (4, 4)), Image.new("RGB", (4, 4), (0, 0, 60))], 6)
+assert blue[1].getpixel((1, 1)) == (0, 0, 60), "a change in blue alone counts"
+
+# --subject: the median background has no square, so the mask keeps the square and blanks the grainy wall.
+masks = subject_masks(clip, background(clip, 30), 30)
+assert masks[3].getpixel((27, 20)) == 255 and masks[3].crop(wall).getextrema()[1] < 16
+noisy = os.path.join(tmp, "noisy.gif")
+clip[0].save(noisy, save_all=True, append_images=clip[1:], duration=100, loop=0)
+rows = player_rows([noisy, "--subject", "--mode", "braille", "-w", "40"], os.path.join(tmp, "subj.html"))
+assert all(not "".join(r[-2:]).strip() for r in rows), "the wall is blank"
+assert all("".join(r).strip() for r in rows), "the square is drawn"
+
+# Braille: one dot threshold for the clip, so a big bright box blinking on the left leaves the right side's dots alone.
+blinky = os.path.join(tmp, "blink.gif")
+on = frames[0].copy()
+ImageDraw.Draw(on).rectangle((0, 0, 39, 39), fill="white")
+frames[0].save(blinky, save_all=True, append_images=[on, frames[0], on], duration=100, loop=0)
+rows = player_rows([blinky, "--mode", "braille", "-w", "20"], os.path.join(tmp, "blink.html"))
+assert len({tuple(line.ljust(20)[12:] for line in r) for r in rows}) == 1, rows
+
+# Video: non-square pixels are shown at their display shape.
+if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+    vid = os.path.join(tmp, "anamorphic.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=360x270:rate=10:duration=0.3",
+                    "-vf", "setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", vid], check=True)
+    img, _ = next(video_frames(vid, Namespace(fps=None, start=0, duration=None), 480, 5))
+    assert abs(img.width / img.height - 16 / 9) < 0.02, img.size
+    # MP4 is BT.709 and tagged, so browsers show the exact page color; odd sizes are cut, not padded with black.
+    mp4 = os.path.join(tmp, "page.mp4")
+    to_mp4([Image.new("RGB", (41, 31), (243, 234, 216))] * 2, [40, 40], mp4, None)
+    tags = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,color_space,color_primaries,"
+                           "color_transfer,color_range", "-of", "csv=p=0", mp4], capture_output=True, text=True).stdout
+    w, h, *color = tags.strip().split(",")
+    assert int(w) % 2 == 0 and int(h) % 2 == 0 and color == ["tv", "bt709", "bt709", "bt709"], tags
+    px = subprocess.run(["ffmpeg", "-v", "error", "-i", mp4, "-frames:v", "1", "-vf", "crop=2:2:iw-2:ih-2,"
+                         "scale=in_color_matrix=bt709:in_range=tv:flags=accurate_rnd,format=rgb24", "-f", "rawvideo",
+                         "-"], capture_output=True).stdout
+    assert all(abs(v - t) <= 2 for v, t in zip(px, (243, 234, 216) * 4)), list(px)  # corner, so the cut edge too
+
+# Bad option mixes stop with one clear line, never a traceback or a silent ignore.
+svg = os.path.join(tmp, "logo.svg")
+scene_file = os.path.join(tmp, "dot.py")
+with open(scene_file, "w") as f:
+    f.write("from PIL import Image\nfrom scenes import scene\n\n@scene(8, 8, 4, 2)\ndef dot(w, h, n, seed):\n"
+            "    return [Image.new('RGB', (w, h), (60 * k, 0, 0)) for k in range(n)]\n")
+with open(svg, "w") as f:
+    f.write('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>')
+for argv, says in (([src, "--subject", "--subject-cut", "0"], "--subject-cut > 0"),
+                   (["--scene", scene_file, "--duration", "1"], "--scene is one short loop"),
+                   (["--scene", "fire"], ".py scene file"),  # the built-in scenes are gone
+                   ([still, "--effect", "matrix"], "invalid choice"), ([src, "--mode", "halfblock"], "invalid choice"),
+                   ([src, "--glow", "0.5"], "unrecognized"), ([src, "--colors", "c64"], "unrecognized"),
+                   ([src, "--dither"], "unrecognized"), ([src, "--under", "0.5"], "unrecognized"),
+                   ([svg], "convert it to PNG")):
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        try:
+            main(argv + ["-o", os.path.join(tmp, "bad.gif")])
+        except SystemExit as e:
+            assert e.code == 2, argv
+        else:
+            raise AssertionError(argv)
+    assert says in err.getvalue(), (argv, err.getvalue())
+print("ok")
